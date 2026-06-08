@@ -1,0 +1,15 @@
+.env
+*.env
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Runtime state and locally generated artifacts.
+logs/
+backups/
+approvals/
+data/glirn_email_drafts/
+data/glirn_invoice_drafts/
+data/glirn_deal_packs/
+data/glirn_live.db
+data/glirn_live.db-*

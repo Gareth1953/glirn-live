@@ -1,0 +1,2 @@
+{"action": "approve", "capital_execution": false, "created_at": "2026-05-28T06:26:11.859898+00:00", "id": "3e698b1a-dfcb-4647-80be-09761c2c1a62", "opportunity_id": "887cc0a4-3998-40b9-9a48-ad285f870916", "status": "approved_human_review"}
+{"action": "outcome", "capital_execution": false, "created_at": "2026-05-28T07:41:14.175382+00:00", "id": "b249f85f-eda3-48f6-b40c-f593fb6c40a6", "opportunity_id": "9f9cdf89-915a-4d89-ba4d-07b04b14c53c", "realized_value": 0.0, "reviewer_note": "Monitor provider pricing movement before further review.", "status": "monitored"}

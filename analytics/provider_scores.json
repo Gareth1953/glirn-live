@@ -1,0 +1,16 @@
+{
+    "OpenAI_Test": {
+        "success_count": 105,
+        "failure_count": 0,
+        "average_latency": 2.346304720924014,
+        "average_cost": 0.0002052952380952381,
+        "score": 92.76
+    },
+    "Anthropic_Test": {
+        "success_count": 1,
+        "failure_count": 3,
+        "average_latency": 3.3704779148101807,
+        "average_cost": 0.002934,
+        "score": 0
+    }
+}

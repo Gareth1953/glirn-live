@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: glirn
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    disk:
+      name: glirn-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: GLIRN_DB_PATH
+        value: /var/data/glirn_live.db
+      - key: ARBITRAGE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GLIRN_SMTP_HOST
+        sync: false
+      - key: GLIRN_SMTP_PORT
+        sync: false
+      - key: GLIRN_SMTP_USERNAME
+        sync: false
+      - key: GLIRN_SMTP_PASSWORD
+        sync: false
+      - key: GLIRN_FROM_EMAIL
+        sync: false

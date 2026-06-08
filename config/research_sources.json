@@ -1,0 +1,44 @@
+{
+    "sources": [
+        {
+            "name": "AI Infrastructure News",
+            "category": "ai_infrastructure_news",
+            "url": "https://example.com/ai-infrastructure-news",
+            "enabled": false,
+            "refresh_cadence": "daily",
+            "notes": "Disabled placeholder for AI infrastructure news monitoring. No live fetching or scraping is implemented."
+        },
+        {
+            "name": "Model Pricing Pages",
+            "category": "model_pricing_pages",
+            "url": "https://example.com/model-pricing",
+            "enabled": false,
+            "refresh_cadence": "daily",
+            "notes": "Disabled placeholder for model provider pricing pages. No API keys or live requests are used."
+        },
+        {
+            "name": "Cloud Provider Announcements",
+            "category": "cloud_provider_announcements",
+            "url": "https://example.com/cloud-announcements",
+            "enabled": false,
+            "refresh_cadence": "daily",
+            "notes": "Disabled placeholder for cloud provider announcements related to AI infrastructure."
+        },
+        {
+            "name": "Enterprise AI Orchestration Blogs",
+            "category": "enterprise_ai_orchestration_blogs",
+            "url": "https://example.com/enterprise-ai-orchestration",
+            "enabled": false,
+            "refresh_cadence": "weekly",
+            "notes": "Disabled placeholder for enterprise AI orchestration research sources."
+        },
+        {
+            "name": "Non-Crypto System Inefficiency Sources",
+            "category": "non_crypto_system_inefficiency",
+            "url": "https://example.com/non-crypto-system-inefficiency",
+            "enabled": false,
+            "refresh_cadence": "weekly",
+            "notes": "Disabled placeholder for non-crypto arbitrage and system inefficiency sources."
+        }
+    ]
+}
