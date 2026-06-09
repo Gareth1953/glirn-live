@@ -1,5 +1,13 @@
 import unittest
 
+from glirn_human_review import (
+    DECLINE_CRITERIA,
+    HUMAN_REVIEW_CHECKLIST,
+    RED_FLAG_RULES,
+    build_initial_human_review_framework,
+    evaluate_human_review,
+)
+
 from glirn import (
     LEGAL_SECTORS,
     Candidate,
@@ -1156,6 +1164,100 @@ class GlirnFoundationTests(unittest.TestCase):
         self.assertFalse(review["client_ready"])
         self.assertFalse(review["client_delivery_allowed"])
         self.assertTrue(review["approval_required_before_client_ready"])
+
+    def test_intelligence_brief_contains_mandatory_human_review_framework(self):
+        review = get_glirn_dashboard_data()["intelligence_review_engine"]["latest_generated_review"]
+        framework = review["human_review_framework"]
+
+        self.assertEqual(
+            {item["check_id"] for item in framework["checklist"]},
+            set(HUMAN_REVIEW_CHECKLIST),
+        )
+        self.assertEqual(set(framework["red_flag_rules"]), set(RED_FLAG_RULES))
+        self.assertEqual(set(framework["decline_criteria"]), set(DECLINE_CRITERIA))
+        self.assertTrue(framework["human_review_required"])
+        self.assertTrue(framework["quality_assurance_required"])
+        self.assertFalse(framework["client_delivery_allowed"])
+
+    def test_human_review_approval_requires_complete_checklist_and_resolved_red_flags(self):
+        brief = {
+            "review_id": "brief-001",
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": True,
+        }
+        brief["human_review_framework"] = build_initial_human_review_framework(
+            brief,
+            ai_confidence=40,
+            speculative_content=True,
+            evidence_sufficient=False,
+        )
+        submission = {
+            "reviewer": "Gareth",
+            "outcome": "approved_for_manual_delivery",
+            "approval_rationale": "Reviewed against the quality framework.",
+            "checklist_results": {key: True for key in HUMAN_REVIEW_CHECKLIST},
+            "red_flag_resolutions": {},
+            "delivery_status": "ready_for_manual_delivery",
+        }
+
+        unresolved = evaluate_human_review(brief, submission)
+        self.assertFalse(unresolved["approved_for_manual_delivery"])
+        self.assertIn("low_ai_confidence", unresolved["unresolved_red_flags"])
+        self.assertIn("speculative_content", unresolved["unresolved_red_flags"])
+        self.assertIn("insufficient_evidence", unresolved["unresolved_red_flags"])
+        self.assertEqual(unresolved["delivery_status"], "blocked")
+
+        submission["red_flag_resolutions"] = {
+            name: True for name, active in unresolved["red_flags"].items() if active
+        }
+        approved = evaluate_human_review(brief, submission)
+        self.assertTrue(approved["approved_for_manual_delivery"])
+        self.assertEqual(approved["delivery_status"], "ready_for_manual_delivery")
+        self.assertTrue(approved["manual_delivery_only"])
+        self.assertFalse(approved["external_delivery_enabled"])
+
+    def test_candidate_specific_human_review_requires_active_consent(self):
+        brief = {
+            "review_id": "brief-candidate-001",
+            "candidate_personal_data_included": True,
+            "candidate_personal_data_blocked": True,
+        }
+        brief["human_review_framework"] = build_initial_human_review_framework(brief)
+        record = evaluate_human_review(brief, {
+            "reviewer": "Gareth",
+            "outcome": "approved_for_manual_delivery",
+            "approval_rationale": "Candidate-specific brief reviewed.",
+            "checklist_results": {key: True for key in HUMAN_REVIEW_CHECKLIST},
+            "red_flag_resolutions": {"candidate_specific_intelligence": True},
+            "delivery_status": "ready_for_manual_delivery",
+        })
+
+        self.assertFalse(record["candidate_consent_valid"])
+        self.assertFalse(record["approved_for_manual_delivery"])
+        self.assertIn("candidate_specific_intelligence", record["unresolved_red_flags"])
+
+    def test_decline_record_uses_defined_criteria_and_blocks_delivery(self):
+        brief = {
+            "review_id": "brief-decline-001",
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": True,
+        }
+        record = evaluate_human_review(brief, {
+            "reviewer": "Gareth",
+            "outcome": "declined",
+            "approval_rationale": "A specialist adviser is better placed.",
+            "checklist_results": {},
+            "decline_criterion": "specialist_adviser_better_placed",
+            "delivery_status": "blocked",
+        })
+
+        self.assertEqual(record["outcome"], "declined")
+        self.assertEqual(record["delivery_status"], "blocked")
+        self.assertEqual(
+            record["decline_reason"],
+            "Another specialist adviser would better serve the client's needs.",
+        )
+        self.assertFalse(record["client_delivery_allowed"])
 
     def test_intelligence_review_candidate_personal_data_blocked_without_consent(self):
         data = get_glirn_dashboard_data()

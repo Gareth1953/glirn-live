@@ -2,6 +2,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import re
 
+from glirn_human_review import build_initial_human_review_framework
+
 
 LEGAL_SECTORS = [
     "Corporate & M&A",
@@ -2690,6 +2692,12 @@ def build_intelligence_review_engine(
         "capital_execution": False,
         "autonomous_execution": False,
     }
+    review["human_review_framework"] = build_initial_human_review_framework(
+        review,
+        ai_confidence=top_match.get("placement_probability_score", 0),
+        speculative_content=False,
+        evidence_sufficient=bool(review["source_modules"] and top_client),
+    )
 
     return {
         "engine": "intelligence_review_engine",

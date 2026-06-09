@@ -504,3 +504,13 @@ GLIRN creates an immediate fixed acknowledgement for each valid public enquiry. 
 If SMTP is not configured or delivery fails, the enquiry still succeeds and the acknowledgement is persisted as `queued_local_only`. The Command Centre shows its status for local review.
 
 Automatic informational responses are limited to predefined templates covering the GBP 500 Intelligence Review, GLIRN services, confidentiality, candidate support, future legal leaders, and international support. Every other enquiry creates a draft with `awaiting_gareth_approval`; no personalised response, commitment, introduction, pricing negotiation, invoice, payment request, or money movement is automatic.
+
+## Intelligence brief human review and quality assurance
+
+Every intelligence brief must complete the Mission 106 human review checklist before it can become ready for manual delivery. The reviewer must be named and must record an outcome and approval rationale. The checklist covers scope, evidence, separation of fact from speculation, human review of AI-assisted content, confidence limitations, advice boundaries, candidate consent, confidentiality, non-guarantee wording, and final wording quality.
+
+The following red flags require additional review and block approval until resolved: low AI confidence, speculative content, candidate-specific intelligence, wording that could imply legal or regulated recruitment advice, and insufficient evidence. Candidate-specific intelligence also requires active candidate consent.
+
+GLIRN should decline work where legal or regulated recruitment advice is requested, evidence is insufficient, consent is unavailable, the request is outside GLIRN's expertise, guarantees or improper influence are requested, confidentiality or ethical handling cannot be maintained, or another specialist adviser would better serve the client.
+
+Record reviews through `POST /glirn/intelligence-briefs/human-review`. Records are persisted as `human_review_record` entries and audit-safe actions. The audit trail records the enquiry date, reviewer, outcome, approval rationale, delivery status, and red-flag state without copying candidate-specific details. Delivery remains manual and Gareth remains final approval authority.

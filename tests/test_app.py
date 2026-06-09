@@ -12,6 +12,7 @@ os.environ.setdefault(
 )
 
 import app
+import glirn_human_review
 import glirn_responses
 import glirn_storage
 
@@ -4590,6 +4591,102 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(event["candidate_personal_data_blocked"])
         self.assertFalse(event["external_delivery_enabled"])
 
+    def test_human_review_endpoint_blocks_incomplete_approval(self):
+        brief = {
+            "review_id": "glirn-review-human-001",
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": True,
+            "human_review_framework": {
+                "red_flags": {key: False for key in glirn_human_review.RED_FLAG_RULES}
+            },
+        }
+        glirn_data = {
+            "intelligence_review_engine": {"generated_reviews": [brief]}
+        }
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=glirn_data):
+            response = self.client.post(
+                "/glirn/intelligence-briefs/human-review",
+                json={
+                    "brief_id": brief["review_id"],
+                    "reviewer": "Gareth",
+                    "outcome": "approved_for_manual_delivery",
+                    "approval_rationale": "Ready for controlled delivery.",
+                    "checklist_results": {},
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        detail = response.json()["detail"]
+        self.assertIn("all mandatory checklist items must pass before approval", detail["errors"])
+        self.assertEqual(
+            set(detail["incomplete_checks"]),
+            set(glirn_human_review.HUMAN_REVIEW_CHECKLIST),
+        )
+
+    def test_human_review_endpoint_persists_audits_and_remains_manual_only(self):
+        brief = {
+            "review_id": "glirn-review-human-002",
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": True,
+            "human_review_framework": {
+                "red_flags": {key: False for key in glirn_human_review.RED_FLAG_RULES}
+            },
+        }
+        glirn_data = {
+            "intelligence_review_engine": {"generated_reviews": [brief]}
+        }
+        checklist = {key: True for key in glirn_human_review.HUMAN_REVIEW_CHECKLIST}
+        stored_records = []
+
+        def store_review(record_type, record_id, payload):
+            self.assertEqual(record_type, "human_review_record")
+            stored_records[:] = [dict(payload)]
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=glirn_data), \
+                patch("app.upsert_record", side_effect=store_review), \
+                patch("app.list_records", side_effect=lambda record_type: list(stored_records)), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as record_event, \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []):
+            response = self.client.post(
+                "/glirn/intelligence-briefs/human-review",
+                json={
+                    "brief_id": brief["review_id"],
+                    "enquiry_date": "2026-06-09T09:00:00+00:00",
+                    "reviewer": "Gareth",
+                    "outcome": "approved_for_manual_delivery",
+                    "approval_rationale": "Evidence and limitations checked.",
+                    "checklist_results": checklist,
+                    "delivery_status": "ready_for_manual_delivery",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        record = data["human_review_record"]
+        self.assertEqual(record["reviewer"], "Gareth")
+        self.assertEqual(record["delivery_status"], "ready_for_manual_delivery")
+        self.assertTrue(record["approved_for_manual_delivery"])
+        self.assertTrue(record["manual_delivery_only"])
+        self.assertFalse(record["external_delivery_enabled"])
+        self.assertFalse(record["automatic_delivery_enabled"])
+        self.assertFalse(data["payment_collection_enabled"])
+        self.assertFalse(data["money_movement_enabled"])
+        self.assertEqual(stored_records[0]["brief_id"], brief["review_id"])
+        persist_action.assert_called_once()
+        self.assertEqual(persist_action.call_args.args[0], "intelligence_brief_human_review")
+        record_event.assert_called_once()
+        event = record_event.call_args.args[0]
+        self.assertEqual(event["reviewer"], "Gareth")
+        self.assertEqual(event["approval_rationale"], "Evidence and limitations checked.")
+        self.assertTrue(event["manual_delivery_only"])
+        self.assertFalse(event["external_delivery_enabled"])
+
     def test_glirn_deliverable_action_creates_audit_entry(self):
         glirn_data = {
             "deliverable_factory": {
@@ -5519,6 +5616,14 @@ class ApiTests(unittest.TestCase):
         self.assertIn("No payment is requested automatically.", homepage)
         self.assertIn("GLIRN does not take automatic payment through the public website.", terms)
         self.assertIn("GBP 500 Senior Legal Hiring Intelligence Brief", contact)
+        qa_statement = "Every intelligence brief is subject to human review and quality assurance before delivery."
+        decline_statement = (
+            "GLIRN may decline engagements where another specialist adviser would better serve the client's needs."
+        )
+        for page in ["index.html", "services.html", "intelligence-review.html", "terms.html"]:
+            body = self.client.get(f"/public/{page}").text
+            self.assertIn(qa_statement, body, page)
+            self.assertIn(decline_statement, body, page)
 
     def test_core_public_pages_return_200_without_prohibited_claims(self):
         pages = [

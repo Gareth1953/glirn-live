@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 import dashboard
 from analytics.provider_scoring import reset_provider_score
@@ -38,6 +38,14 @@ from approval_queue import (
 from approval_ledger import list_approval_events, record_approval_event
 from glirn_storage import append_action, get_state, initialize_schema, list_records, persistence_status, set_state, upsert_record
 from glirn_responses import build_enquiry_response_package
+from glirn_human_review import (
+    ALLOWED_DELIVERY_STATUSES,
+    ALLOWED_OUTCOMES,
+    DECLINE_CRITERIA,
+    HUMAN_REVIEW_CHECKLIST,
+    RED_FLAG_RULES,
+    evaluate_human_review,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -74,6 +82,7 @@ PERSISTED_EXPORT_METADATA = {
     "deal_pack": [],
 }
 PERSISTED_RESPONSE_PACKAGES = []
+PERSISTED_HUMAN_REVIEWS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -90,6 +99,7 @@ def reload_persistent_state():
     PERSISTED_EXPORT_METADATA["invoice_draft"] = list_records("invoice_draft_export")
     PERSISTED_EXPORT_METADATA["deal_pack"] = list_records("deal_pack_export")
     PERSISTED_RESPONSE_PACKAGES[:] = list_records("enquiry_response_package")
+    PERSISTED_HUMAN_REVIEWS[:] = list_records("human_review_record")
 
 
 reload_persistent_state()
@@ -209,6 +219,20 @@ class GlirnIntelligenceReviewActionRequest(BaseModel):
     review_id: str | None = None
     action_type: str
     reason: str
+
+
+class GlirnHumanReviewRequest(BaseModel):
+    brief_id: str | None = None
+    enquiry_date: str | None = None
+    reviewer: str
+    outcome: str
+    approval_rationale: str
+    checklist_results: dict[str, bool] = Field(default_factory=dict)
+    red_flags: dict[str, bool] = Field(default_factory=dict)
+    red_flag_resolutions: dict[str, bool] = Field(default_factory=dict)
+    decline_criterion: str | None = None
+    decline_reason: str | None = None
+    delivery_status: str = "not_ready"
 
 
 class GlirnDeliverableActionRequest(BaseModel):
@@ -1381,6 +1405,8 @@ def render_glirn_daily_executive_briefing(glirn_data):
 def render_glirn_intelligence_review_engine(glirn_data):
     engine = glirn_data.get("intelligence_review_engine", {}) or {}
     latest = engine.get("latest_generated_review") or {}
+    framework = latest.get("human_review_framework") or {}
+    latest_human_review = engine.get("latest_human_review") or {}
 
     return (
         "<div class=\"panel\">"
@@ -1391,13 +1417,18 @@ def render_glirn_intelligence_review_engine(glirn_data):
         f"<div class=\"metric\"><span>Pending review approvals</span><strong>{escape(str(len(engine.get('pending_review_approvals', []) or [])))}</strong></div>"
         f"<div class=\"metric\"><span>Approval status</span><strong>{escape(str(latest.get('approval_status', 'pending_gareth_approval')))}</strong></div>"
         f"<div class=\"metric\"><span>Compliance status</span><strong>{escape(str(latest.get('compliance_status', 'review_required')))}</strong></div>"
+        f"<div class=\"metric\"><span>QA status</span><strong>{escape(str(latest_human_review.get('outcome', framework.get('qa_status', 'awaiting_human_review'))))}</strong></div>"
+        f"<div class=\"metric\"><span>Delivery status</span><strong>{escape(str(latest_human_review.get('delivery_status', 'not_ready')))}</strong></div>"
         "</div>"
         f"<p><span>Latest generated review title</span><strong>{escape(str(latest.get('title', 'No generated review')))}</strong></p>"
         f"<p><span>Target client profile</span>{escape(str(latest.get('target_client_profile', 'none')))}</p>"
         f"<p><span>Practice area</span>{escape(str(latest.get('practice_area', 'none')))}</p>"
         f"<p><span>Jurisdiction</span>{escape(str(latest.get('jurisdiction', 'none')))}</p>"
         f"<p><span>Recommended action</span>{escape(str(latest.get('recommended_action', 'monitor')))}</p>"
-        "<p class=\"muted\">Draft generation may be automatic. Client-ready status and delivery require Gareth approval. No candidate personal data is included without active consent.</p>"
+        f"<p><span>Reviewer</span>{escape(str(latest_human_review.get('reviewer', 'not assigned')))}</p>"
+        f"<p><span>Red flags</span>{escape(', '.join(latest_human_review.get('unresolved_red_flags', framework.get('active_red_flags', []))) or 'none')}</p>"
+        f"<p class=\"description\"><span>Approval rationale</span>{escape(str(latest_human_review.get('approval_rationale', 'Human review not yet recorded.')))}</p>"
+        "<p class=\"muted\">Every intelligence brief requires the mandatory checklist and quality assurance before manual delivery. No candidate personal data is included without active consent.</p>"
         "</div>"
     )
 
@@ -2166,6 +2197,7 @@ def render_gareth_command_centre(glirn_data):
     summary = command_centre.get("revenue_pipeline_summary", {}) or {}
     recommendations = command_centre.get("dave_recommends", []) or []
     new_enquiries = command_centre.get("new_enquiries_awaiting_review", []) or []
+    human_reviews = command_centre.get("intelligence_brief_human_reviews", []) or []
 
     opportunity_rows = "".join(
         "<tr>"
@@ -2221,6 +2253,19 @@ def render_gareth_command_centre(glirn_data):
         for item in new_enquiries
     ) or '<div class="panel"><p class="muted">No new enquiries are awaiting review.</p></div>'
 
+    human_review_cards = "".join(
+        "<article class=\"executive-card\">"
+        f"<h3>{escape(str(item.get('brief_id', 'Intelligence brief')))}</h3>"
+        f"<p><span>Reviewer</span><strong>{escape(str(item.get('reviewer', 'not assigned')))}</strong></p>"
+        f"<p><span>Outcome</span><strong>{escape(str(item.get('outcome', 'awaiting_human_review')))}</strong></p>"
+        f"<p><span>Delivery status</span><strong>{escape(str(item.get('delivery_status', 'not_ready')))}</strong></p>"
+        f"<p><span>Unresolved red flags</span>{escape(', '.join(item.get('unresolved_red_flags', [])) or 'none')}</p>"
+        f"<p class=\"description\"><span>Approval rationale</span>{escape(str(item.get('approval_rationale', 'Not recorded.')))}</p>"
+        "<p class=\"muted\">Manual delivery only. Gareth remains final approval authority.</p>"
+        "</article>"
+        for item in human_reviews
+    ) or '<div class="panel"><p class="muted">No intelligence brief human review has been recorded.</p></div>'
+
     return (
         '<section id="gareth-command-centre" data-default-view="true">'
         '<div class="executive-heading">'
@@ -2240,6 +2285,8 @@ def render_gareth_command_centre(glirn_data):
         f'{approval_cards}</div></section>'
         '<section><h2>New Enquiries Awaiting Review</h2><div class="executive-grid">'
         f'{enquiry_cards}</div></section>'
+        '<section><h2>Intelligence Brief Human Review &amp; QA</h2><div class="executive-grid">'
+        f'{human_review_cards}</div></section>'
         '<section><h2>Revenue Opportunities</h2><div class="table-wrap executive-table"><table>'
         '<thead><tr><th>Client/Firm</th><th>Suggested GLIRN service</th><th>Estimated fee</th><th>Priority</th><th>Status</th></tr></thead>'
         f'<tbody>{opportunity_rows}</tbody></table></div></section>'
@@ -3385,6 +3432,16 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["invoice_draft_export_engine"] = invoice_export_engine
     glirn_data["deal_pack_export_engine"] = deal_pack_engine
 
+    human_reviews = list(PERSISTED_HUMAN_REVIEWS)
+    intelligence_engine = dict(glirn_data.get("intelligence_review_engine", {}) or {})
+    intelligence_engine["human_review_records"] = human_reviews
+    intelligence_engine["latest_human_review"] = human_reviews[-1] if human_reviews else None
+    intelligence_engine["human_review_checklist"] = HUMAN_REVIEW_CHECKLIST
+    intelligence_engine["red_flag_rules"] = RED_FLAG_RULES
+    intelligence_engine["decline_criteria"] = DECLINE_CRITERIA
+    glirn_data["intelligence_review_engine"] = intelligence_engine
+    glirn_data["human_review_records"] = human_reviews
+
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
         email_export_engine,
@@ -3404,6 +3461,7 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
         revenue_ledger,
     )
     glirn_data["gareth_command_centre"]["new_enquiries_awaiting_review"] = list(PERSISTED_RESPONSE_PACKAGES)
+    glirn_data["gareth_command_centre"]["intelligence_brief_human_reviews"] = human_reviews
     glirn_data["new_enquiries_awaiting_review"] = list(PERSISTED_RESPONSE_PACKAGES)
     return glirn_data
 
@@ -4119,6 +4177,86 @@ def record_glirn_intelligence_review_action(
         "outreach_enabled": False,
         "capital_execution": False,
         "autonomous_execution": False,
+    }
+
+
+@app.post("/glirn/intelligence-briefs/human-review")
+def record_glirn_human_review(
+    request: GlirnHumanReviewRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+
+    glirn_data = get_glirn_dashboard_data(
+        pending_approvals=list_pending_approvals(),
+        public_leads=PUBLIC_LEADS,
+    )
+    briefs = glirn_data.get("intelligence_review_engine", {}).get("generated_reviews", []) or []
+    requested_brief_id = (request.brief_id or "").strip()
+    brief = next(
+        (item for item in briefs if item.get("review_id") == requested_brief_id),
+        briefs[0] if briefs and not requested_brief_id else None,
+    )
+    if brief is None:
+        raise HTTPException(status_code=404, detail="intelligence brief not found")
+
+    submission = request.model_dump()
+    record = evaluate_human_review(brief, submission)
+    if record["validation_errors"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "human review requirements were not satisfied",
+                "errors": record["validation_errors"],
+                "incomplete_checks": record["incomplete_checks"],
+                "unresolved_red_flags": record["unresolved_red_flags"],
+            },
+        )
+
+    upsert_record("human_review_record", record["human_review_id"], record)
+    PERSISTED_HUMAN_REVIEWS[:] = list_records("human_review_record")
+    persist_safe_action(
+        "intelligence_brief_human_review",
+        record["human_review_id"],
+        brief_id=record["brief_id"],
+        enquiry_date=record["enquiry_date"],
+        reviewer=record["reviewer"],
+        outcome=record["outcome"],
+        approval_rationale=record["approval_rationale"],
+        delivery_status=record["delivery_status"],
+        unresolved_red_flags=record["unresolved_red_flags"],
+        candidate_consent_valid=record["candidate_consent_valid"],
+        external_delivery_enabled=False,
+        automatic_delivery_enabled=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_intelligence_brief_human_review",
+        "approval_id": record["human_review_id"],
+        "decision": record["outcome"].upper(),
+        "provider": "glirn_human_review_framework",
+        "task_type": "intelligence_brief_quality_assurance",
+        "brief_id": record["brief_id"],
+        "reviewer": record["reviewer"],
+        "approval_rationale": record["approval_rationale"],
+        "delivery_status": record["delivery_status"],
+        "unresolved_red_flags": record["unresolved_red_flags"],
+        "client_delivery_allowed": record["client_delivery_allowed"],
+        "manual_delivery_only": True,
+        "external_delivery_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "human_review_recorded",
+        "human_review_record": record,
+        "available_outcomes": sorted(ALLOWED_OUTCOMES),
+        "available_delivery_statuses": sorted(ALLOWED_DELIVERY_STATUSES),
+        "gareth_final_approval_required": True,
+        "manual_delivery_only": True,
+        "external_delivery_enabled": False,
+        "automatic_delivery_enabled": False,
+        "payment_collection_enabled": False,
+        "money_movement_enabled": False,
     }
 
 
