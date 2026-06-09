@@ -5345,7 +5345,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("GLIRN Principles", response.text)
         self.assertIn("Unsure whether to recruit?", response.text)
         self.assertIn(
-            "Intelligence-led legal recruitment, executive search, and confidential career support for legal organisations and legal professionals at every stage of their journey.",
+            "AI-assisted, human-reviewed hiring intelligence, executive search support, and confidential career conversations for legal organisations and legal professionals at every stage of their journey.",
             response.text,
         )
         self.assertIn("Human-led. Technology-enhanced. Confidentiality-first.", response.text)
@@ -5354,24 +5354,24 @@ class ApiTests(unittest.TestCase):
             "Gain greater clarity before committing to a full executive search process.",
             response.text,
         )
-        self.assertIn("What the &pound;500 Senior Legal Hiring Intelligence Review May Include", response.text)
+        self.assertIn("What the &pound;500 Senior Legal Hiring Intelligence Brief May Include", response.text)
         self.assertIn("Role and hiring priority assessment", response.text)
         self.assertIn("Market difficulty analysis", response.text)
         self.assertIn("Talent availability overview", response.text)
-        self.assertIn("Search viability recommendations", response.text)
-        self.assertIn("Suggested next steps", response.text)
-        self.assertIn("Request a Confidential Review", response.text)
+        self.assertIn("Search viability considerations", response.text)
+        self.assertIn("Suggested discussion points", response.text)
+        self.assertIn("Request a Confidential Brief", response.text)
         principle_items = [
             "Confidentiality-first approach",
             "Human-led decision making",
             "Technology-enhanced market intelligence",
             "No candidate details shared without consent",
-            "Professional legal recruitment support",
+            "Structured legal hiring intelligence support",
         ]
         self.assertIn('<ul class="principles-list">', response.text)
         for principle in principle_items:
             self.assertIn(f"<li>{principle}</li>", response.text)
-        review_position = response.text.index("What the &pound;500 Senior Legal Hiring Intelligence Review May Include")
+        review_position = response.text.index("What the &pound;500 Senior Legal Hiring Intelligence Brief May Include")
         cta_position = response.text.index("Unsure whether to recruit?")
         trust_position = response.text.index("Why Clients Choose GLIRN")
         self.assertLess(review_position, cta_position)
@@ -5421,7 +5421,7 @@ class ApiTests(unittest.TestCase):
             "General Counsel",
             "Chief Legal Officer",
             "Ready to Take the Next Step?",
-            "Request a Confidential Review",
+            "Request a Confidential Brief",
             "Arrange a Confidential Career Discussion",
             "Arrange a confidential career discussion to explore opportunities, long-term career progression, and your future within the legal profession.",
             "Ethical candidate handling",
@@ -5468,21 +5468,57 @@ class ApiTests(unittest.TestCase):
             response.text,
         )
 
-    def test_intelligence_review_page_contains_expanded_fixed_fee_review(self):
+    def test_intelligence_brief_page_contains_expanded_manually_accepted_brief(self):
         response = self.client.get("/public/intelligence-review.html")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Role and hiring priority assessment", response.text)
         self.assertIn("Market difficulty analysis", response.text)
         self.assertIn("Talent availability overview", response.text)
-        self.assertIn("Search viability recommendations", response.text)
-        self.assertIn("Suggested next steps", response.text)
+        self.assertIn("Search viability considerations", response.text)
+        self.assertIn("Suggested discussion points", response.text)
         self.assertIn("&pound;500", response.text)
         self.assertIn("Unsure whether to recruit?", response.text)
-        self.assertIn("Request a Confidential Review", response.text)
+        self.assertIn("Request a Confidential Brief", response.text)
         self.assertIn("A confidential first step", response.text)
-        self.assertIn("Reduce hiring risk before committing to search.", response.text)
+        self.assertIn("Gain clarity before committing to search.", response.text)
+        self.assertIn("subject to manual scope review and written acceptance before paid work begins", response.text)
+        self.assertIn("No payment is requested automatically.", response.text)
         self.assertIn('<ul class="principles-list">', response.text)
+
+    def test_public_pages_use_safe_intelligence_brief_positioning(self):
+        pages = [
+            "index.html",
+            "about.html",
+            "services.html",
+            "intelligence-review.html",
+            "executive-search.html",
+            "contact.html",
+            "privacy.html",
+            "terms.html",
+        ]
+        disclaimer = (
+            "GLIRN does not provide legal advice, regulated recruitment advice, or guaranteed hiring outcomes. "
+            "Any intelligence brief is intended to support internal discussion and must be reviewed alongside "
+            "independent professional judgement."
+        )
+
+        for page in pages:
+            response = self.client.get(f"/public/{page}")
+            self.assertEqual(response.status_code, 200, page)
+            self.assertIn(disclaimer, response.text, page)
+            self.assertNotIn("Senior Legal Hiring Intelligence Review", response.text, page)
+            self.assertNotIn("Hiring Intelligence Review", response.text, page)
+            self.assertNotIn("Professional legal recruitment support", response.text, page)
+
+        homepage = self.client.get("/public/index.html").text
+        contact = self.client.get("/public/contact.html").text
+        terms = self.client.get("/public/terms.html").text
+        self.assertIn("AI-assisted, human-reviewed", homepage)
+        self.assertIn("All enquiries are manually reviewed before any paid work is accepted.", contact)
+        self.assertIn("No payment is requested automatically.", homepage)
+        self.assertIn("GLIRN does not take automatic payment through the public website.", terms)
+        self.assertIn("GBP 500 Senior Legal Hiring Intelligence Brief", contact)
 
     def test_core_public_pages_return_200_without_prohibited_claims(self):
         pages = [
