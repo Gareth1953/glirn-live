@@ -46,6 +46,10 @@ from glirn_human_review import (
     RED_FLAG_RULES,
     evaluate_human_review,
 )
+from glirn_brief_template import (
+    IntelligenceBriefValidationError,
+    build_intelligence_brief_package,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -83,9 +87,11 @@ PERSISTED_EXPORT_METADATA = {
 }
 PERSISTED_RESPONSE_PACKAGES = []
 PERSISTED_HUMAN_REVIEWS = []
+PERSISTED_INTELLIGENCE_BRIEFS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
+GLIRN_INTELLIGENCE_BRIEFS_DIR = os.path.join("data", "glirn_intelligence_briefs")
 
 
 def reload_persistent_state():
@@ -100,6 +106,7 @@ def reload_persistent_state():
     PERSISTED_EXPORT_METADATA["deal_pack"] = list_records("deal_pack_export")
     PERSISTED_RESPONSE_PACKAGES[:] = list_records("enquiry_response_package")
     PERSISTED_HUMAN_REVIEWS[:] = list_records("human_review_record")
+    PERSISTED_INTELLIGENCE_BRIEFS[:] = list_records("intelligence_brief_record")
 
 
 reload_persistent_state()
@@ -233,6 +240,11 @@ class GlirnHumanReviewRequest(BaseModel):
     decline_criterion: str | None = None
     decline_reason: str | None = None
     delivery_status: str = "not_ready"
+
+
+class GlirnIntelligenceBriefPackageRequest(BaseModel):
+    brief_id: str
+    sections: dict[str, str] = Field(default_factory=dict)
 
 
 class GlirnDeliverableActionRequest(BaseModel):
@@ -4257,6 +4269,108 @@ def record_glirn_human_review(
         "automatic_delivery_enabled": False,
         "payment_collection_enabled": False,
         "money_movement_enabled": False,
+    }
+
+
+@app.post("/glirn/intelligence-briefs/package")
+def generate_glirn_intelligence_brief_package(
+    request: GlirnIntelligenceBriefPackageRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+
+    glirn_data = get_glirn_dashboard_data(
+        pending_approvals=list_pending_approvals(),
+        public_leads=PUBLIC_LEADS,
+    )
+    briefs = glirn_data.get("intelligence_review_engine", {}).get("generated_reviews", []) or []
+    brief = next((item for item in briefs if item.get("review_id") == request.brief_id.strip()), None)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="intelligence brief not found")
+
+    matching_reviews = [
+        record for record in PERSISTED_HUMAN_REVIEWS
+        if record.get("brief_id") == brief.get("review_id")
+    ]
+    human_review = matching_reviews[-1] if matching_reviews else None
+    if human_review is None:
+        raise HTTPException(status_code=403, detail="Mission 106 human review is required before delivery packaging")
+
+    audit_record_id = f"intelligence-brief-audit-{brief.get('review_id')}"
+    try:
+        package = build_intelligence_brief_package(
+            brief,
+            human_review,
+            request.sections,
+            audit_record_id=audit_record_id,
+        )
+    except IntelligenceBriefValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    os.makedirs(GLIRN_INTELLIGENCE_BRIEFS_DIR, exist_ok=True)
+    local_file_path = os.path.join(
+        GLIRN_INTELLIGENCE_BRIEFS_DIR,
+        package["suggested_filename"],
+    )
+    with open(local_file_path, "w", encoding="utf-8") as brief_file:
+        brief_file.write(package["markdown"])
+
+    brief_record = {**package, "local_file_path": local_file_path}
+    audit_record = {
+        "audit_record_id": audit_record_id,
+        "brief_record_id": package["brief_record_id"],
+        "review_record_id": package["review_record_id"],
+        "event_type": "intelligence_brief_package_generated",
+        "generated_at": package["generated_at"],
+        "reviewer_identity": package["reviewer_identity"],
+        "review_date": package["review_date"],
+        "manual_delivery_only": True,
+        "automatic_delivery_enabled": False,
+        "external_delivery_enabled": False,
+    }
+    upsert_record("intelligence_brief_record", package["brief_record_id"], brief_record)
+    upsert_record("intelligence_brief_audit_record", audit_record_id, audit_record)
+    PERSISTED_INTELLIGENCE_BRIEFS[:] = list_records("intelligence_brief_record")
+    persist_safe_action(
+        "intelligence_brief_package_generated",
+        audit_record_id,
+        brief_record_id=package["brief_record_id"],
+        review_record_id=package["review_record_id"],
+        reviewer_identity=package["reviewer_identity"],
+        review_date=package["review_date"],
+        local_file_path=local_file_path,
+        manual_delivery_only=True,
+        automatic_delivery_enabled=False,
+        external_delivery_enabled=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_intelligence_brief_package_generated",
+        "approval_id": audit_record_id,
+        "decision": "PACKAGE_READY_FOR_MANUAL_DELIVERY",
+        "provider": "glirn_intelligence_brief_delivery_framework",
+        "task_type": "generate_delivery_ready_package",
+        "brief_record_id": package["brief_record_id"],
+        "review_record_id": package["review_record_id"],
+        "reviewer_identity": package["reviewer_identity"],
+        "review_date": package["review_date"],
+        "local_file_path": local_file_path,
+        "manual_delivery_only": True,
+        "automatic_delivery_enabled": False,
+        "external_delivery_enabled": False,
+        "external_integrations_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "intelligence_brief_package_ready_for_manual_delivery",
+        "intelligence_brief_package": brief_record,
+        "audit_record": audit_record,
+        "manual_delivery_only": True,
+        "automatic_delivery_enabled": False,
+        "external_delivery_enabled": False,
+        "email_sending_enabled": False,
+        "external_upload_enabled": False,
+        "external_integrations_enabled": False,
     }
 
 

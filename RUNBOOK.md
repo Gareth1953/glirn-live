@@ -514,3 +514,13 @@ The following red flags require additional review and block approval until resol
 GLIRN should decline work where legal or regulated recruitment advice is requested, evidence is insufficient, consent is unavailable, the request is outside GLIRN's expertise, guarantees or improper influence are requested, confidentiality or ethical handling cannot be maintained, or another specialist adviser would better serve the client.
 
 Record reviews through `POST /glirn/intelligence-briefs/human-review`. Records are persisted as `human_review_record` entries and audit-safe actions. The audit trail records the enquiry date, reviewer, outcome, approval rationale, delivery status, and red-flag state without copying candidate-specific details. Delivery remains manual and Gareth remains final approval authority.
+
+## Intelligence Brief template and delivery package
+
+Mission 107 standardises every delivery-ready GLIRN Intelligence Brief with these mandatory sections: Client Context, Scope of Brief, Hiring Priority Assessment, Market Observations, Risks and Considerations, Indicative Next Steps, Human Review Summary, and Required Disclaimer.
+
+Generate a package through `POST /glirn/intelligence-briefs/package`. The request must identify the source brief and provide the first six client-content sections. GLIRN inserts the Mission 106 human review summary and required disclaimer. Package generation is rejected unless a matching persisted Mission 106 record is approved for manual delivery with no validation errors, incomplete checks, or unresolved red flags.
+
+The generated Markdown file is stored locally under `data/glirn_intelligence_briefs/`. Its brief record links to the Mission 106 review record and a dedicated audit record, including reviewer identity and review date. Email sending, external upload, external integrations, and automatic delivery remain disabled. A human must deliver the package manually.
+
+Human-led. Technology-enhanced. Confidentiality-first.
