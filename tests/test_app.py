@@ -15,6 +15,7 @@ import app
 import glirn_human_review
 import glirn_responses
 import glirn_storage
+import notification_service
 
 
 class ApiTests(unittest.TestCase):
@@ -6063,6 +6064,216 @@ class ApiTests(unittest.TestCase):
         transport.login.assert_called_once_with("glirn-user", "test-password")
         transport.send_message.assert_called_once()
 
+    def test_enquiry_notification_email_contains_required_fields_and_full_message(self):
+        enquiry = {
+            "lead_id": "public-lead-108",
+            "received_at": "2026-06-11T09:15:00+00:00",
+            "inquiry_type": "Executive Search Enquiry",
+            "name": "Alex Client",
+            "organisation": "Example Legal LLP",
+            "country": "England",
+            "practice_area": "Technology Law",
+            "jurisdiction": "England & Wales",
+            "seniority_level": "Partner",
+            "timescale": "1-3 months",
+            "message": "This is the complete confidential enquiry message.",
+        }
+
+        email = notification_service.build_enquiry_notification_email(enquiry)
+
+        self.assertEqual(
+            email["subject"],
+            "[GLIRN] New Enquiry Received – Manual Review Required",
+        )
+        self.assertEqual(
+            email["recipient_address"],
+            "legalintelligencerecruitment@outlook.com",
+        )
+        for expected in [
+            "Enquiry ID: public-lead-108",
+            "Submission timestamp: 2026-06-11T09:15:00+00:00",
+            "Enquiry type: Executive Search Enquiry",
+            "Name: Alex Client",
+            "Organisation: Example Legal LLP",
+            "Country: England",
+            "Practice area: Technology Law",
+            "Jurisdiction: England & Wales",
+            "Seniority: Partner",
+            "Timescale: 1-3 months",
+            "This is the complete confidential enquiry message.",
+            notification_service.MANUAL_REVIEW_NOTICE,
+        ]:
+            self.assertIn(expected, email["body"])
+
+    def test_configured_business_notification_sends_to_fixed_recipient(self):
+        enquiry = {
+            "lead_id": "public-lead-108",
+            "received_at": "2026-06-11T09:15:00+00:00",
+            "inquiry_type": "General Enquiry",
+            "name": "Notification Test",
+            "organisation": "Example Legal LLP",
+            "country": "England",
+            "practice_area": "Corporate Law",
+            "jurisdiction": "England & Wales",
+            "seniority_level": "Partner",
+            "timescale": "Exploratory",
+            "message": "Please notify Gareth.",
+        }
+        smtp_environment = {
+            "GLIRN_SMTP_HOST": "smtp.example.com",
+            "GLIRN_SMTP_PORT": "587",
+            "GLIRN_SMTP_USERNAME": "glirn-user",
+            "GLIRN_SMTP_PASSWORD": "test-password",
+            "GLIRN_FROM_EMAIL": "enquiries@example.com",
+        }
+
+        with patch.dict("os.environ", smtp_environment, clear=True), \
+                patch("notification_service.smtplib.SMTP") as smtp:
+            result = notification_service.deliver_enquiry_notification(enquiry)
+
+        self.assertEqual(result["delivery_status"], "sent")
+        self.assertEqual(result["recipient_address"], notification_service.GLIRN_BUSINESS_EMAIL)
+        self.assertEqual(result["attempt_count"], 1)
+        transport = smtp.return_value.__enter__.return_value
+        sent_message = transport.send_message.call_args.args[0]
+        self.assertEqual(sent_message["To"], notification_service.GLIRN_BUSINESS_EMAIL)
+        self.assertEqual(sent_message["Subject"], notification_service.NOTIFICATION_SUBJECT)
+        self.assertIn(notification_service.MANUAL_REVIEW_NOTICE, sent_message.get_content())
+
+    def test_notification_failure_does_not_prevent_enquiry_persistence(self):
+        payload = {
+            "name": "Failure Test",
+            "organisation": "Failure Legal LLP",
+            "email": "failure@example.com",
+            "country": "England",
+            "inquiry_type": "Law Firm / Legal Team Enquiry",
+            "legal_sector": "Corporate Law",
+            "practice_area": "Corporate Law",
+            "jurisdiction": "England & Wales",
+            "hiring_need": "Partner review",
+            "seniority_level": "Partner",
+            "timescale": "1-3 months",
+            "message": "Persist this enquiry even when notification delivery fails.",
+            "consent": True,
+        }
+        failed_notification = {
+            "notification_id": "glirn-enquiry-notification-public-lead-001",
+            "related_enquiry_id": "public-lead-001",
+            "recipient_address": notification_service.GLIRN_BUSINESS_EMAIL,
+            "delivery_status": "delivery_failed",
+            "created_at": "2026-06-11T09:00:00+00:00",
+            "last_attempt_at": "2026-06-11T09:00:00+00:00",
+            "delivered_at": None,
+            "attempt_count": 1,
+            "retry_attempts": 0,
+            "failure_reason": "smtp_delivery_failed",
+            "manual_resend_available": True,
+            "informational_only": True,
+            "business_email_notification_only": True,
+            "automatic_acceptance_enabled": False,
+            "automatic_payment_enabled": False,
+            "automatic_brief_generation_enabled": False,
+            "automatic_candidate_outreach_enabled": False,
+            "automatic_search_activity_enabled": False,
+            "automatic_delivery_enabled": False,
+            "external_integrations_enabled": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                patch.dict("os.environ", {"GLIRN_DB_PATH": os.path.join(tmpdir, "live.db")}, clear=True), \
+                patch("app.PUBLIC_LEADS", []), \
+                patch("app.PUBLIC_LEAD_SUBMISSION_TIMES", {}), \
+                patch("app.PERSISTED_RESPONSE_PACKAGES", []), \
+                patch("app.PERSISTED_ENQUIRY_NOTIFICATIONS", []), \
+                patch("app.deliver_enquiry_notification", return_value=failed_notification), \
+                patch("app.record_approval_event"):
+            response = self.client.post("/glirn/public-leads/intake", json=payload)
+            enquiries = glirn_storage.list_records("website_enquiry")
+            notifications = glirn_storage.list_records("enquiry_notification_record")
+            actions = glirn_storage.list_actions()
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(enquiries), 1)
+        self.assertEqual(enquiries[0]["message"], payload["message"])
+        self.assertEqual(notifications[0]["delivery_status"], "delivery_failed")
+        notification_actions = [item for item in actions if item["action_type"] == "enquiry_notification_attempt"]
+        self.assertEqual(len(notification_actions), 1)
+        self.assertNotIn("message", notification_actions[0]["payload"])
+        self.assertFalse(notification_actions[0]["payload"]["sensitive_enquiry_content_logged"])
+
+    def test_manual_notification_resend_updates_retry_status(self):
+        enquiry = {
+            "lead_id": "public-lead-108",
+            "name": "Resend Test",
+            "message": "Confidential message",
+        }
+        previous = {
+            "notification_id": "glirn-enquiry-notification-public-lead-108",
+            "related_enquiry_id": "public-lead-108",
+            "recipient_address": notification_service.GLIRN_BUSINESS_EMAIL,
+            "delivery_status": "delivery_failed",
+            "created_at": "2026-06-11T09:00:00+00:00",
+            "last_attempt_at": "2026-06-11T09:00:00+00:00",
+            "attempt_count": 1,
+            "retry_attempts": 0,
+            "failure_reason": "smtp_not_configured",
+        }
+        resent = {
+            **previous,
+            "delivery_status": "sent",
+            "last_attempt_at": "2026-06-11T09:05:00+00:00",
+            "delivered_at": "2026-06-11T09:05:00+00:00",
+            "attempt_count": 2,
+            "retry_attempts": 1,
+            "failure_reason": None,
+            "manual_resend_available": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                patch.dict("os.environ", {"GLIRN_DB_PATH": os.path.join(tmpdir, "live.db")}, clear=True), \
+                patch("app.PUBLIC_LEADS", [enquiry]), \
+                patch("app.PERSISTED_ENQUIRY_NOTIFICATIONS", [previous]), \
+                patch("app.deliver_enquiry_notification", return_value=resent):
+            response = self.client.post(
+                "/glirn/enquiry-notifications/glirn-enquiry-notification-public-lead-108/resend",
+                json={"reason": "Retry after SMTP configuration check."},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["notification"]["delivery_status"], "sent")
+        self.assertEqual(data["notification"]["retry_attempts"], 1)
+        self.assertTrue(data["informational_only"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_payment_enabled"])
+        self.assertFalse(data["automatic_brief_generation_enabled"])
+        self.assertFalse(data["automatic_candidate_outreach_enabled"])
+        self.assertFalse(data["automatic_search_activity_enabled"])
+        self.assertFalse(data["automatic_delivery_enabled"])
+        self.assertFalse(data["external_integrations_enabled"])
+
+    def test_command_centre_surfaces_notification_failure_and_manual_resend(self):
+        failed = {
+            "notification_id": "glirn-enquiry-notification-public-lead-108",
+            "related_enquiry_id": "public-lead-108",
+            "recipient_address": notification_service.GLIRN_BUSINESS_EMAIL,
+            "delivery_status": "delivery_failed",
+            "last_attempt_at": "2026-06-11T09:00:00+00:00",
+            "retry_attempts": 0,
+        }
+        with patch("app.PERSISTED_ENQUIRY_NOTIFICATIONS", [failed]), \
+                patch("app.list_pending_approvals", return_value=[]):
+            dashboard_response = self.client.get("/glirn/dashboard")
+            ui_response = self.client.get("/ui")
+
+        self.assertEqual(dashboard_response.status_code, 200)
+        summary = dashboard_response.json()["gareth_command_centre"]["enquiry_notification_summary"]
+        self.assertEqual(summary["notification_failure_count"], 1)
+        self.assertTrue(summary["manual_resend_available"])
+        self.assertIn("Enquiry Notification Status", ui_response.text)
+        self.assertIn("Resend notification", ui_response.text)
+        self.assertIn("/glirn/enquiry-notifications/", ui_response.text)
+
     def test_public_lead_validation_rejects_invalid_email_missing_type_and_long_message(self):
         payload = {
             "name": "Validation Client",
@@ -6193,7 +6404,19 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(data["revenue_approval_package"]["suggested_glirn_service"], "Executive Search")
         self.assertFalse(data["revenue_approval_package"]["automatic_client_contact_enabled"])
         self.assertFalse(data["revenue_approval_package"]["money_movement_enabled"])
+        self.assertEqual(
+            data["notification"]["recipient_address"],
+            "legalintelligencerecruitment@outlook.com",
+        )
+        self.assertEqual(data["notification_delivery_status"], "delivery_failed")
+        self.assertTrue(data["notification_informational_only"])
         self.assertFalse(data["automatic_email_enabled"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_payment_enabled"])
+        self.assertFalse(data["automatic_brief_generation_enabled"])
+        self.assertFalse(data["automatic_candidate_outreach_enabled"])
+        self.assertFalse(data["automatic_search_activity_enabled"])
+        self.assertFalse(data["automatic_delivery_enabled"])
         self.assertFalse(data["client_contact_enabled"])
         self.assertFalse(data["candidate_contact_enabled"])
         record_event.assert_called_once()

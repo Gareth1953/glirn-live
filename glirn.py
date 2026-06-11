@@ -6510,6 +6510,30 @@ def build_gareth_command_centre(
     }
 
 
+def build_enquiry_notification_summary(notification_records, enquiry_count=0):
+    records = list(notification_records or [])
+    failures = [item for item in records if item.get("delivery_status") != "sent"]
+    sent = [item for item in records if item.get("delivery_status") == "sent"]
+    return {
+        "new_enquiry_count": int(enquiry_count or 0),
+        "notification_count": len(records),
+        "notifications_sent": len(sent),
+        "notification_failures_requiring_attention": failures,
+        "notification_failure_count": len(failures),
+        "latest_notification_status": records[-1].get("delivery_status") if records else "not_attempted",
+        "manual_resend_available": bool(failures),
+        "informational_only": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_brief_generation_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_integrations_enabled": False,
+        "human_review_mandatory": True,
+    }
+
+
 def get_legal_practice_areas():
     return [
         LegalPracticeArea(code=sector_code(sector), name=sector).to_dict()

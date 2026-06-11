@@ -18,7 +18,7 @@ from audit_logger import log_route_decision
 from core.provider_guard import provider_allowed
 from core.router import route_task
 from governance_analytics import get_governance_analytics
-from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_deal_pack_export_object, build_email_draft_export_object, build_gareth_command_centre, build_invoice_draft_export_object, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
+from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_deal_pack_export_object, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_invoice_draft_export_object, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
 from main import classify_task, load_env_file, load_provider_config, load_runtime_providers
 from agent_safety_gate import REQUEST_APPROVAL, evaluate_agent_action
 from opportunity_scanner import get_scanner_results
@@ -50,6 +50,7 @@ from glirn_brief_template import (
     IntelligenceBriefValidationError,
     build_intelligence_brief_package,
 )
+from notification_service import deliver_enquiry_notification
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -88,6 +89,7 @@ PERSISTED_EXPORT_METADATA = {
 PERSISTED_RESPONSE_PACKAGES = []
 PERSISTED_HUMAN_REVIEWS = []
 PERSISTED_INTELLIGENCE_BRIEFS = []
+PERSISTED_ENQUIRY_NOTIFICATIONS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -107,6 +109,7 @@ def reload_persistent_state():
     PERSISTED_RESPONSE_PACKAGES[:] = list_records("enquiry_response_package")
     PERSISTED_HUMAN_REVIEWS[:] = list_records("human_review_record")
     PERSISTED_INTELLIGENCE_BRIEFS[:] = list_records("intelligence_brief_record")
+    PERSISTED_ENQUIRY_NOTIFICATIONS[:] = list_records("enquiry_notification_record")
 
 
 reload_persistent_state()
@@ -386,6 +389,10 @@ class GlirnPublicLeadActionRequest(BaseModel):
     reason: str
 
 
+class GlirnEnquiryNotificationResendRequest(BaseModel):
+    reason: str
+
+
 class GlirnFinalApprovalActionRequest(BaseModel):
     final_approval_id: str | None = None
     action_type: str
@@ -500,6 +507,36 @@ def export_engine_with_persisted_records(engine, export_type):
 
 def persist_safe_action(event_type, subject_id, **details):
     append_action(event_type, subject_id, details)
+
+
+def attempt_enquiry_notification(enquiry, previous_record=None):
+    notification = deliver_enquiry_notification(enquiry, previous_record=previous_record)
+    upsert_record(
+        "enquiry_notification_record",
+        notification["notification_id"],
+        notification,
+    )
+    PERSISTED_ENQUIRY_NOTIFICATIONS[:] = list_records("enquiry_notification_record")
+    persist_safe_action(
+        "enquiry_notification_attempt",
+        notification["notification_id"],
+        related_enquiry_id=notification["related_enquiry_id"],
+        recipient_address=notification["recipient_address"],
+        delivery_status=notification["delivery_status"],
+        last_attempt_at=notification["last_attempt_at"],
+        retry_attempts=notification["retry_attempts"],
+        failure_reason=notification["failure_reason"],
+        informational_only=True,
+        sensitive_enquiry_content_logged=False,
+        automatic_acceptance_enabled=False,
+        automatic_payment_enabled=False,
+        automatic_brief_generation_enabled=False,
+        automatic_candidate_outreach_enabled=False,
+        automatic_search_activity_enabled=False,
+        automatic_delivery_enabled=False,
+        external_integrations_enabled=False,
+    )
+    return notification
 
 
 def is_secret_backup_path(path):
@@ -2210,6 +2247,8 @@ def render_gareth_command_centre(glirn_data):
     recommendations = command_centre.get("dave_recommends", []) or []
     new_enquiries = command_centre.get("new_enquiries_awaiting_review", []) or []
     human_reviews = command_centre.get("intelligence_brief_human_reviews", []) or []
+    notification_summary = command_centre.get("enquiry_notification_summary", {}) or {}
+    notification_failures = command_centre.get("notification_failures_requiring_attention", []) or []
 
     opportunity_rows = "".join(
         "<tr>"
@@ -2278,6 +2317,20 @@ def render_gareth_command_centre(glirn_data):
         for item in human_reviews
     ) or '<div class="panel"><p class="muted">No intelligence brief human review has been recorded.</p></div>'
 
+    notification_failure_cards = "".join(
+        "<article class=\"executive-card\">"
+        f"<h3>{escape(str(item.get('related_enquiry_id', 'Unknown enquiry')))}</h3>"
+        f"<p><span>Delivery status</span><strong class=\"blocked\">{escape(str(item.get('delivery_status', 'delivery_failed')))}</strong></p>"
+        f"<p><span>Recipient</span>{escape(str(item.get('recipient_address', '')))}</p>"
+        f"<p><span>Last attempt</span>{escape(str(item.get('last_attempt_at', 'not recorded')))}</p>"
+        f"<p><span>Retry attempts</span>{escape(str(item.get('retry_attempts', 0)))}</p>"
+        "<div class=\"action-row\">"
+        f"<button class=\"enquiry-notification-resend\" type=\"button\" data-notification-id=\"{escape(str(item.get('notification_id', '')))}\">Resend notification</button>"
+        "</div><p class=\"muted\">Informational notification only. Manual review remains mandatory.</p>"
+        "</article>"
+        for item in notification_failures
+    ) or '<div class="panel"><p class="muted">No notification failures require attention.</p></div>'
+
     return (
         '<section id="gareth-command-centre" data-default-view="true">'
         '<div class="executive-heading">'
@@ -2287,6 +2340,8 @@ def render_gareth_command_centre(glirn_data):
         '</div>'
         '<section><h2>Revenue Pipeline Summary</h2><div class="executive-metrics">'
         f'<div class="executive-metric"><span>Total enquiries</span><strong>{summary.get("total_enquiries", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>New enquiry notifications</span><strong>{notification_summary.get("notification_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Notification failures</span><strong>{notification_summary.get("notification_failure_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Awaiting approval</span><strong>{summary.get("awaiting_approval", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Approved opportunities</span><strong>{summary.get("approved_opportunities", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Proposal packs ready</span><strong>{summary.get("proposal_packs_ready", 0)}</strong></div>'
@@ -2297,6 +2352,8 @@ def render_gareth_command_centre(glirn_data):
         f'{approval_cards}</div></section>'
         '<section><h2>New Enquiries Awaiting Review</h2><div class="executive-grid">'
         f'{enquiry_cards}</div></section>'
+        '<section><h2>Enquiry Notification Status</h2><div class="executive-grid">'
+        f'{notification_failure_cards}</div></section>'
         '<section><h2>Intelligence Brief Human Review &amp; QA</h2><div class="executive-grid">'
         f'{human_review_cards}</div></section>'
         '<section><h2>Revenue Opportunities</h2><div class="table-wrap executive-table"><table>'
@@ -2868,6 +2925,7 @@ def render_ui_page():
     const advancedViewToggle = document.getElementById('advanced-view-toggle');
     const advancedView = document.getElementById('advanced-view');
     const garethApprovalButtons = document.querySelectorAll('.gareth-approval-action');
+    const enquiryNotificationResendButtons = document.querySelectorAll('.enquiry-notification-resend');
 
     advancedViewToggle.addEventListener('click', () => {{
       const willOpen = advancedView.hidden;
@@ -2903,6 +2961,30 @@ def render_ui_page():
         }} catch (error) {{
           alert(error.message);
           approvalButton.disabled = false;
+        }}
+      }});
+    }});
+
+    enquiryNotificationResendButtons.forEach((resendButton) => {{
+      resendButton.addEventListener('click', async () => {{
+        resendButton.disabled = true;
+        try {{
+          const response = await fetch(`/glirn/enquiry-notifications/${{resendButton.dataset.notificationId}}/resend`, {{
+            method: 'POST',
+            headers: {{
+              'Content-Type': 'application/json',
+              ...(uiKey ? {{ 'X-API-Key': uiKey }} : {{}})
+            }},
+            body: JSON.stringify({{ reason: 'Manual resend requested from Gareth Command Centre.' }})
+          }});
+          const data = await response.json();
+          if (!response.ok) {{
+            throw new Error(data.detail || 'Notification resend failed');
+          }}
+          window.location.reload();
+        }} catch (error) {{
+          alert(error.message);
+          resendButton.disabled = false;
         }}
       }});
     }});
@@ -3474,7 +3556,18 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     )
     glirn_data["gareth_command_centre"]["new_enquiries_awaiting_review"] = list(PERSISTED_RESPONSE_PACKAGES)
     glirn_data["gareth_command_centre"]["intelligence_brief_human_reviews"] = human_reviews
+    notification_summary = build_enquiry_notification_summary(
+        PERSISTED_ENQUIRY_NOTIFICATIONS,
+        enquiry_count=len(PUBLIC_LEADS),
+    )
+    glirn_data["gareth_command_centre"]["enquiry_notification_summary"] = notification_summary
+    glirn_data["gareth_command_centre"]["enquiry_notifications"] = list(PERSISTED_ENQUIRY_NOTIFICATIONS)
+    glirn_data["gareth_command_centre"]["notification_failures_requiring_attention"] = (
+        notification_summary["notification_failures_requiring_attention"]
+    )
     glirn_data["new_enquiries_awaiting_review"] = list(PERSISTED_RESPONSE_PACKAGES)
+    glirn_data["enquiry_notification_summary"] = notification_summary
+    glirn_data["enquiry_notifications"] = list(PERSISTED_ENQUIRY_NOTIFICATIONS)
     return glirn_data
 
 
@@ -5364,6 +5457,7 @@ def intake_glirn_public_lead(request: GlirnPublicLeadIntakeRequest):
         response_package,
     )
     PERSISTED_RESPONSE_PACKAGES[:] = list_records("enquiry_response_package")
+    notification = attempt_enquiry_notification(lead)
     persist_safe_action(
         "public_lead_received",
         record.get("lead_id"),
@@ -5433,8 +5527,15 @@ def intake_glirn_public_lead(request: GlirnPublicLeadIntakeRequest):
         "faq_response": response_package.get("faq_response"),
         "draft_response": response_package.get("draft_response"),
         "response_package_id": response_package.get("response_package_id"),
+        "notification": notification,
+        "notification_delivery_status": notification.get("delivery_status"),
         "automatic_acknowledgement_enabled": True,
+        "business_email_notification_enabled": True,
+        "notification_informational_only": True,
         "gareth_final_approval_required": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
         "automatic_email_enabled": False,
         "automatic_linkedin_messaging_enabled": False,
         "automatic_introductions_enabled": False,
@@ -5443,9 +5544,68 @@ def intake_glirn_public_lead(request: GlirnPublicLeadIntakeRequest):
         "candidate_contact_enabled": False,
         "invoice_issuing_enabled": False,
         "payment_collection_enabled": False,
+        "automatic_brief_generation_enabled": False,
+        "automatic_search_activity_enabled": False,
+        "automatic_delivery_enabled": False,
         "external_integrations_enabled": False,
         "capital_execution": False,
         "autonomous_execution": False,
+    }
+
+
+@app.post("/glirn/enquiry-notifications/{notification_id}/resend")
+def resend_glirn_enquiry_notification(
+    notification_id: str,
+    request: GlirnEnquiryNotificationResendRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    if not request.reason.strip():
+        raise HTTPException(status_code=400, detail="reason is required")
+
+    previous = next(
+        (item for item in PERSISTED_ENQUIRY_NOTIFICATIONS if item.get("notification_id") == notification_id),
+        None,
+    )
+    if previous is None:
+        raise HTTPException(status_code=404, detail="enquiry notification not found")
+    enquiry = next(
+        (item for item in PUBLIC_LEADS if item.get("lead_id") == previous.get("related_enquiry_id")),
+        None,
+    )
+    if enquiry is None:
+        raise HTTPException(status_code=404, detail="related enquiry not found")
+
+    notification = attempt_enquiry_notification(enquiry, previous_record=previous)
+    persist_safe_action(
+        "enquiry_notification_manual_resend",
+        notification_id,
+        related_enquiry_id=notification["related_enquiry_id"],
+        delivery_status=notification["delivery_status"],
+        retry_attempts=notification["retry_attempts"],
+        reason=request.reason.strip(),
+        informational_only=True,
+        sensitive_enquiry_content_logged=False,
+        automatic_acceptance_enabled=False,
+        automatic_payment_enabled=False,
+        automatic_brief_generation_enabled=False,
+        automatic_candidate_outreach_enabled=False,
+        automatic_search_activity_enabled=False,
+        automatic_delivery_enabled=False,
+        external_integrations_enabled=False,
+    )
+    return {
+        "status": "enquiry_notification_resend_recorded",
+        "notification": notification,
+        "gareth_final_approval_required": True,
+        "informational_only": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_brief_generation_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_integrations_enabled": False,
     }
 
 

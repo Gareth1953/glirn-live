@@ -58,6 +58,7 @@ from glirn import (
     build_client_contact_readiness_object,
     apply_client_contact_action,
     build_email_draft_export_engine,
+    build_enquiry_notification_summary,
     build_email_draft_export_object,
     apply_email_draft_export_action,
     build_invoice_draft_export_engine,
@@ -3081,6 +3082,33 @@ class GlirnFoundationTests(unittest.TestCase):
         self.assertFalse(command["money_movement_enabled"])
         self.assertFalse(command["external_integrations_enabled"])
         self.assertTrue(command["human_approval_mandatory"])
+
+    def test_enquiry_notification_summary_tracks_failures_and_preserves_safeguards(self):
+        summary = build_enquiry_notification_summary([
+            {
+                "notification_id": "notification-1",
+                "delivery_status": "sent",
+            },
+            {
+                "notification_id": "notification-2",
+                "delivery_status": "delivery_failed",
+                "manual_resend_available": True,
+            },
+        ], enquiry_count=2)
+
+        self.assertEqual(summary["new_enquiry_count"], 2)
+        self.assertEqual(summary["notification_count"], 2)
+        self.assertEqual(summary["notifications_sent"], 1)
+        self.assertEqual(summary["notification_failure_count"], 1)
+        self.assertTrue(summary["manual_resend_available"])
+        self.assertTrue(summary["human_review_mandatory"])
+        self.assertFalse(summary["automatic_acceptance_enabled"])
+        self.assertFalse(summary["automatic_payment_enabled"])
+        self.assertFalse(summary["automatic_brief_generation_enabled"])
+        self.assertFalse(summary["automatic_candidate_outreach_enabled"])
+        self.assertFalse(summary["automatic_search_activity_enabled"])
+        self.assertFalse(summary["automatic_delivery_enabled"])
+        self.assertFalse(summary["external_integrations_enabled"])
 
 
 if __name__ == "__main__":

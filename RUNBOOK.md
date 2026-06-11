@@ -524,3 +524,15 @@ Generate a package through `POST /glirn/intelligence-briefs/package`. The reques
 The generated Markdown file is stored locally under `data/glirn_intelligence_briefs/`. Its brief record links to the Mission 106 review record and a dedicated audit record, including reviewer identity and review date. Email sending, external upload, external integrations, and automatic delivery remain disabled. A human must deliver the package manually.
 
 Human-led. Technology-enhanced. Confidentiality-first.
+
+## Enquiry notification framework
+
+Mission 108 sends an informational notification to `legalintelligencerecruitment@outlook.com` after a valid website enquiry and its response records have been persisted. The notification uses the configured `GLIRN_SMTP_HOST`, `GLIRN_SMTP_PORT`, `GLIRN_SMTP_USERNAME`, `GLIRN_SMTP_PASSWORD`, and `GLIRN_FROM_EMAIL` settings.
+
+The notification contains the enquiry ID, submission timestamp, enquiry type, name, organisation, country, practice area, jurisdiction, seniority, timescale, full enquiry message, and the mandatory manual-review warning. It does not accept work, initiate payment discussion, generate an intelligence brief, contact a candidate, begin search activity, or deliver any service.
+
+Notification metadata is persisted as an `enquiry_notification_record`. Audit-safe action history records the notification ID, related enquiry ID, recipient, delivery status, attempt timestamp, failure reason, and retry count without copying the enquiry message. A delivery failure never reverses or blocks enquiry persistence.
+
+The Gareth Command Centre displays notification counts and failures requiring attention. Failed notifications can be retried manually through `POST /glirn/enquiry-notifications/{notification_id}/resend`. This endpoint only resends the fixed business notification and requires the configured API key when protected mode is enabled.
+
+All enquiries remain subject to Mission 106 human review. Gareth remains the sole approval authority for acceptance, payment discussions, intelligence brief preparation, search activity, and delivery.
