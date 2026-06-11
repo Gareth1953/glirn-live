@@ -536,3 +536,15 @@ Notification metadata is persisted as an `enquiry_notification_record`. Audit-sa
 The Gareth Command Centre displays notification counts and failures requiring attention. Failed notifications can be retried manually through `POST /glirn/enquiry-notifications/{notification_id}/resend`. This endpoint only resends the fixed business notification and requires the configured API key when protected mode is enabled.
 
 All enquiries remain subject to Mission 106 human review. Gareth remains the sole approval authority for acceptance, payment discussions, intelligence brief preparation, search activity, and delivery.
+
+## Multi-agent intelligence review
+
+Mission 109 adds four independent review perspectives before an Intelligence Brief can reach Gareth for final approval: Intelligence Analyst, Risk Reviewer, Devil's Advocate Reviewer, and Quality Assurance Reviewer. Start the review through `POST /glirn/intelligence-briefs/multi-agent-review` after a Mission 106 human review record exists.
+
+Each persisted `multi_agent_review_record` links the brief and Mission 106 review, records the four reviewer outputs and confidence scores, and includes the consensus summary and timestamp. Audit-safe history stores identifiers, scores, status, and escalation outcomes without duplicating candidate-sensitive content.
+
+The review automatically escalates when average confidence is below 70, any reviewer requests escalation, legal-advice inference risk is identified, candidate consent is unresolved, or evidence is insufficient. Escalated briefs cannot receive final approval or be packaged for delivery. Resolve the issues, update the brief, and repeat the multi-agent review.
+
+Record Gareth's final decision through `POST /glirn/intelligence-briefs/{brief_id}/final-approval`. Package generation through `POST /glirn/intelligence-briefs/package` requires a valid Mission 106 approval, a completed and escalation-free Mission 109 review of the exact content, and final approval by Gareth. The generated package remains local and manual-only; no acceptance, payment, candidate outreach, delivery, or external commitment is automatic.
+
+Human-led. Technology-enhanced. Confidentiality-first.

@@ -18,7 +18,7 @@ from audit_logger import log_route_decision
 from core.provider_guard import provider_allowed
 from core.router import route_task
 from governance_analytics import get_governance_analytics
-from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_deal_pack_export_object, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_invoice_draft_export_object, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
+from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_deal_pack_export_object, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_invoice_draft_export_object, build_multi_agent_review_summary, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
 from main import classify_task, load_env_file, load_provider_config, load_runtime_providers
 from agent_safety_gate import REQUEST_APPROVAL, evaluate_agent_action
 from opportunity_scanner import get_scanner_results
@@ -48,9 +48,11 @@ from glirn_human_review import (
 )
 from glirn_brief_template import (
     IntelligenceBriefValidationError,
+    REQUIRED_DISCLAIMER,
     build_intelligence_brief_package,
 )
 from notification_service import deliver_enquiry_notification
+from glirn_multi_agent_review import brief_content_fingerprint, run_multi_agent_review
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -90,6 +92,7 @@ PERSISTED_RESPONSE_PACKAGES = []
 PERSISTED_HUMAN_REVIEWS = []
 PERSISTED_INTELLIGENCE_BRIEFS = []
 PERSISTED_ENQUIRY_NOTIFICATIONS = []
+PERSISTED_MULTI_AGENT_REVIEWS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -110,6 +113,7 @@ def reload_persistent_state():
     PERSISTED_HUMAN_REVIEWS[:] = list_records("human_review_record")
     PERSISTED_INTELLIGENCE_BRIEFS[:] = list_records("intelligence_brief_record")
     PERSISTED_ENQUIRY_NOTIFICATIONS[:] = list_records("enquiry_notification_record")
+    PERSISTED_MULTI_AGENT_REVIEWS[:] = list_records("multi_agent_review_record")
 
 
 reload_persistent_state()
@@ -247,7 +251,18 @@ class GlirnHumanReviewRequest(BaseModel):
 
 class GlirnIntelligenceBriefPackageRequest(BaseModel):
     brief_id: str
+    final_approval_id: str | None = None
     sections: dict[str, str] = Field(default_factory=dict)
+
+
+class GlirnMultiAgentReviewRequest(BaseModel):
+    brief_id: str
+    sections: dict[str, str] = Field(default_factory=dict)
+
+
+class GlirnIntelligenceBriefFinalApprovalRequest(BaseModel):
+    action_type: str
+    reason: str
 
 
 class GlirnDeliverableActionRequest(BaseModel):
@@ -2249,6 +2264,8 @@ def render_gareth_command_centre(glirn_data):
     human_reviews = command_centre.get("intelligence_brief_human_reviews", []) or []
     notification_summary = command_centre.get("enquiry_notification_summary", {}) or {}
     notification_failures = command_centre.get("notification_failures_requiring_attention", []) or []
+    multi_agent_summary = command_centre.get("multi_agent_review_summary", {}) or {}
+    multi_agent_reviews = command_centre.get("multi_agent_reviews", []) or []
 
     opportunity_rows = "".join(
         "<tr>"
@@ -2331,6 +2348,18 @@ def render_gareth_command_centre(glirn_data):
         for item in notification_failures
     ) or '<div class="panel"><p class="muted">No notification failures require attention.</p></div>'
 
+    multi_agent_review_cards = "".join(
+        "<article class=\"executive-card\">"
+        f"<h3>{escape(str(item.get('brief_id', 'Intelligence brief')))}</h3>"
+        f"<p><span>Status</span><strong>{escape(str(item.get('review_status', 'not_started')))}</strong></p>"
+        f"<p><span>Overall confidence</span><strong>{escape(str((item.get('consensus_summary') or {}).get('overall_confidence_score', 'not recorded')))}</strong></p>"
+        f"<p><span>Escalation</span><strong>{'required' if item.get('escalation_required') else 'clear'}</strong></p>"
+        f"<p class=\"description\"><span>Next action</span>{escape('; '.join((item.get('consensus_summary') or {}).get('suggested_next_actions', [])) or 'Review required.')}</p>"
+        "<p class=\"muted\">Mission 106 approval, a cleared Mission 109 review, and Gareth's final approval are required. Delivery remains manual.</p>"
+        "</article>"
+        for item in multi_agent_reviews
+    ) or '<div class="panel"><p class="muted">No multi-agent intelligence review has been recorded.</p></div>'
+
     return (
         '<section id="gareth-command-centre" data-default-view="true">'
         '<div class="executive-heading">'
@@ -2342,6 +2371,8 @@ def render_gareth_command_centre(glirn_data):
         f'<div class="executive-metric"><span>Total enquiries</span><strong>{summary.get("total_enquiries", 0)}</strong></div>'
         f'<div class="executive-metric"><span>New enquiry notifications</span><strong>{notification_summary.get("notification_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Notification failures</span><strong>{notification_summary.get("notification_failure_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Multi-agent reviews</span><strong>{multi_agent_summary.get("review_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Review escalations</span><strong>{multi_agent_summary.get("escalated_review_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Awaiting approval</span><strong>{summary.get("awaiting_approval", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Approved opportunities</span><strong>{summary.get("approved_opportunities", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Proposal packs ready</span><strong>{summary.get("proposal_packs_ready", 0)}</strong></div>'
@@ -2356,6 +2387,8 @@ def render_gareth_command_centre(glirn_data):
         f'{notification_failure_cards}</div></section>'
         '<section><h2>Intelligence Brief Human Review &amp; QA</h2><div class="executive-grid">'
         f'{human_review_cards}</div></section>'
+        '<section><h2>Multi-Agent Intelligence Review</h2><div class="executive-grid">'
+        f'{multi_agent_review_cards}</div></section>'
         '<section><h2>Revenue Opportunities</h2><div class="table-wrap executive-table"><table>'
         '<thead><tr><th>Client/Firm</th><th>Suggested GLIRN service</th><th>Estimated fee</th><th>Priority</th><th>Status</th></tr></thead>'
         f'<tbody>{opportunity_rows}</tbody></table></div></section>'
@@ -3533,8 +3566,15 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     intelligence_engine["human_review_checklist"] = HUMAN_REVIEW_CHECKLIST
     intelligence_engine["red_flag_rules"] = RED_FLAG_RULES
     intelligence_engine["decline_criteria"] = DECLINE_CRITERIA
+    multi_agent_reviews = list(PERSISTED_MULTI_AGENT_REVIEWS)
+    multi_agent_summary = build_multi_agent_review_summary(multi_agent_reviews)
+    intelligence_engine["multi_agent_review_records"] = multi_agent_reviews
+    intelligence_engine["latest_multi_agent_review"] = multi_agent_reviews[-1] if multi_agent_reviews else None
+    intelligence_engine["multi_agent_review_summary"] = multi_agent_summary
     glirn_data["intelligence_review_engine"] = intelligence_engine
     glirn_data["human_review_records"] = human_reviews
+    glirn_data["multi_agent_review_records"] = multi_agent_reviews
+    glirn_data["multi_agent_review_summary"] = multi_agent_summary
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3556,6 +3596,9 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     )
     glirn_data["gareth_command_centre"]["new_enquiries_awaiting_review"] = list(PERSISTED_RESPONSE_PACKAGES)
     glirn_data["gareth_command_centre"]["intelligence_brief_human_reviews"] = human_reviews
+    glirn_data["gareth_command_centre"]["multi_agent_review_summary"] = multi_agent_summary
+    glirn_data["gareth_command_centre"]["multi_agent_reviews"] = multi_agent_reviews
+    glirn_data["gareth_command_centre"]["escalated_multi_agent_reviews"] = multi_agent_summary["escalated_reviews"]
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -4365,6 +4408,146 @@ def record_glirn_human_review(
     }
 
 
+@app.post("/glirn/intelligence-briefs/multi-agent-review")
+def generate_glirn_multi_agent_review(
+    request: GlirnMultiAgentReviewRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    glirn_data = get_glirn_dashboard_data(
+        pending_approvals=list_pending_approvals(),
+        public_leads=PUBLIC_LEADS,
+    )
+    briefs = glirn_data.get("intelligence_review_engine", {}).get("generated_reviews", []) or []
+    brief = next((item for item in briefs if item.get("review_id") == request.brief_id.strip()), None)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="intelligence brief not found")
+    human_reviews = [
+        record for record in PERSISTED_HUMAN_REVIEWS
+        if record.get("brief_id") == brief.get("review_id")
+    ]
+    human_review = human_reviews[-1] if human_reviews else None
+    if human_review is None:
+        raise HTTPException(status_code=403, detail="Mission 106 human review is required before multi-agent review")
+
+    review_brief = dict(brief)
+    review_brief["sections"] = {
+        **(brief.get("sections") or {}),
+        **request.sections,
+        "Required Disclaimer": REQUIRED_DISCLAIMER,
+    }
+    record = run_multi_agent_review(review_brief, human_review)
+    upsert_record("multi_agent_review_record", record["review_id"], record)
+    PERSISTED_MULTI_AGENT_REVIEWS[:] = list_records("multi_agent_review_record")
+    persist_safe_action(
+        "intelligence_brief_multi_agent_review",
+        record["review_id"],
+        brief_id=record["brief_id"],
+        mission_106_review_id=record["mission_106_review_id"],
+        overall_confidence_score=record["consensus_summary"]["overall_confidence_score"],
+        escalation_required=record["escalation_required"],
+        escalation_requirements=record["consensus_summary"]["escalation_requirements"],
+        review_status=record["review_status"],
+        sensitive_candidate_information_duplicated=False,
+        automatic_delivery_enabled=False,
+        external_commitments_enabled=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_intelligence_brief_multi_agent_review",
+        "approval_id": record["review_id"],
+        "decision": record["review_status"].upper(),
+        "provider": "glirn_multi_agent_review_framework",
+        "task_type": "intelligence_brief_multi_agent_review",
+        "brief_id": record["brief_id"],
+        "overall_confidence_score": record["consensus_summary"]["overall_confidence_score"],
+        "escalation_required": record["escalation_required"],
+        "gareth_final_approval_required": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "multi_agent_review_completed",
+        "multi_agent_review": record,
+        "gareth_final_approval_required": True,
+        "delivery_allowed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
+@app.post("/glirn/intelligence-briefs/{brief_id}/final-approval")
+def record_glirn_intelligence_brief_final_approval(
+    brief_id: str,
+    request: GlirnIntelligenceBriefFinalApprovalRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    action_type = request.action_type.strip()
+    if action_type not in {"approve", "reject", "needs_more_information"}:
+        raise HTTPException(status_code=400, detail="unsupported final approval action")
+    if not request.reason.strip():
+        raise HTTPException(status_code=400, detail="reason is required")
+    reviews = [item for item in PERSISTED_MULTI_AGENT_REVIEWS if item.get("brief_id") == brief_id]
+    review = reviews[-1] if reviews else None
+    if review is None or not review.get("review_complete"):
+        raise HTTPException(status_code=403, detail="Mission 109 multi-agent review is required before final approval")
+    if review.get("escalation_required") or review.get("unresolved_escalations"):
+        raise HTTPException(status_code=403, detail="unresolved Mission 109 escalations block final approval")
+
+    final_approval_id = f"intelligence-brief-final-approval-{brief_id}"
+    status_map = {
+        "approve": "approved_by_gareth",
+        "reject": "rejected_by_gareth",
+        "needs_more_information": "needs_more_information",
+    }
+    final_status = status_map[action_type]
+    FINAL_APPROVAL_LOCAL_STATUS[final_approval_id] = final_status
+    set_state("final_approval_statuses", FINAL_APPROVAL_LOCAL_STATUS)
+    persist_safe_action(
+        "intelligence_brief_final_approval",
+        final_approval_id,
+        brief_id=brief_id,
+        multi_agent_review_id=review["review_id"],
+        final_approval_status=final_status,
+        reason=request.reason.strip(),
+        gareth_final_decision=True,
+        automatic_delivery_enabled=False,
+        external_commitments_enabled=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_intelligence_brief_final_approval",
+        "approval_id": final_approval_id,
+        "decision": final_status.upper(),
+        "provider": "gareth_final_approval",
+        "task_type": "intelligence_brief_final_approval",
+        "brief_id": brief_id,
+        "multi_agent_review_id": review["review_id"],
+        "reason": request.reason.strip(),
+        "gareth_final_decision": True,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "intelligence_brief_final_approval_recorded",
+        "final_approval_id": final_approval_id,
+        "brief_id": brief_id,
+        "multi_agent_review_id": review["review_id"],
+        "final_approval_status": final_status,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
 @app.post("/glirn/intelligence-briefs/package")
 def generate_glirn_intelligence_brief_package(
     request: GlirnIntelligenceBriefPackageRequest,
@@ -4389,6 +4572,25 @@ def generate_glirn_intelligence_brief_package(
     if human_review is None:
         raise HTTPException(status_code=403, detail="Mission 106 human review is required before delivery packaging")
 
+    matching_multi_agent_reviews = [
+        record for record in PERSISTED_MULTI_AGENT_REVIEWS
+        if record.get("brief_id") == brief.get("review_id")
+    ]
+    multi_agent_review = matching_multi_agent_reviews[-1] if matching_multi_agent_reviews else None
+    if multi_agent_review is None or not multi_agent_review.get("review_complete"):
+        raise HTTPException(status_code=403, detail="Mission 109 multi-agent review is required before delivery packaging")
+    if multi_agent_review.get("escalation_required") or multi_agent_review.get("unresolved_escalations"):
+        raise HTTPException(status_code=403, detail="unresolved Mission 109 escalations block delivery packaging")
+    if multi_agent_review.get("content_fingerprint") != brief_content_fingerprint(request.sections):
+        raise HTTPException(status_code=409, detail="brief content changed after Mission 109 review")
+
+    expected_final_approval_id = f"intelligence-brief-final-approval-{brief.get('review_id')}"
+    requested_final_approval_id = (request.final_approval_id or expected_final_approval_id).strip()
+    if requested_final_approval_id != expected_final_approval_id:
+        raise HTTPException(status_code=403, detail="final approval does not match the intelligence brief")
+    if FINAL_APPROVAL_LOCAL_STATUS.get(expected_final_approval_id) != "approved_by_gareth":
+        raise HTTPException(status_code=403, detail="final Gareth approval is required before delivery packaging")
+
     audit_record_id = f"intelligence-brief-audit-{brief.get('review_id')}"
     try:
         package = build_intelligence_brief_package(
@@ -4408,11 +4610,19 @@ def generate_glirn_intelligence_brief_package(
     with open(local_file_path, "w", encoding="utf-8") as brief_file:
         brief_file.write(package["markdown"])
 
-    brief_record = {**package, "local_file_path": local_file_path}
+    brief_record = {
+        **package,
+        "local_file_path": local_file_path,
+        "multi_agent_review_id": multi_agent_review["review_id"],
+        "final_approval_id": expected_final_approval_id,
+        "final_approval_status": "approved_by_gareth",
+    }
     audit_record = {
         "audit_record_id": audit_record_id,
         "brief_record_id": package["brief_record_id"],
         "review_record_id": package["review_record_id"],
+        "multi_agent_review_id": multi_agent_review["review_id"],
+        "final_approval_id": expected_final_approval_id,
         "event_type": "intelligence_brief_package_generated",
         "generated_at": package["generated_at"],
         "reviewer_identity": package["reviewer_identity"],
@@ -4429,6 +4639,8 @@ def generate_glirn_intelligence_brief_package(
         audit_record_id,
         brief_record_id=package["brief_record_id"],
         review_record_id=package["review_record_id"],
+        multi_agent_review_id=multi_agent_review["review_id"],
+        final_approval_id=expected_final_approval_id,
         reviewer_identity=package["reviewer_identity"],
         review_date=package["review_date"],
         local_file_path=local_file_path,
@@ -4444,6 +4656,8 @@ def generate_glirn_intelligence_brief_package(
         "task_type": "generate_delivery_ready_package",
         "brief_record_id": package["brief_record_id"],
         "review_record_id": package["review_record_id"],
+        "multi_agent_review_id": multi_agent_review["review_id"],
+        "final_approval_id": expected_final_approval_id,
         "reviewer_identity": package["reviewer_identity"],
         "review_date": package["review_date"],
         "local_file_path": local_file_path,

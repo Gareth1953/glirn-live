@@ -11,6 +11,7 @@ os.environ.setdefault(
 )
 
 import app
+from glirn_multi_agent_review import brief_content_fingerprint
 from glirn_brief_template import (
     CLIENT_CONTENT_SECTIONS,
     GLIRN_PRINCIPLE,
@@ -39,6 +40,18 @@ def approved_review(brief_id="brief-107"):
 
 def complete_sections():
     return {name: f"Approved content for {name}." for name in CLIENT_CONTENT_SECTIONS}
+
+
+def cleared_multi_agent_review(brief_id="brief-107"):
+    return {
+        "review_id": f"multi-agent-review-{brief_id}",
+        "brief_id": brief_id,
+        "review_complete": True,
+        "content_fingerprint": brief_content_fingerprint(complete_sections()),
+        "escalation_required": False,
+        "unresolved_escalations": [],
+        "review_status": "cleared_for_gareth_approval",
+    }
 
 
 class IntelligenceBriefTemplateTests(unittest.TestCase):
@@ -131,7 +144,11 @@ class IntelligenceBriefPackageApiTests(unittest.TestCase):
                 patch("app.list_pending_approvals", return_value=[]), \
                 patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
                 patch.object(app, "PERSISTED_HUMAN_REVIEWS", [approved_review()]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [cleared_multi_agent_review()]), \
                 patch.object(app, "PERSISTED_INTELLIGENCE_BRIEFS", []), \
+                patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {
+                    "intelligence-brief-final-approval-brief-107": "approved_by_gareth",
+                }, clear=True), \
                 patch("app.GLIRN_INTELLIGENCE_BRIEFS_DIR", temp_dir), \
                 patch("app.upsert_record", side_effect=store_record), \
                 patch("app.list_records", return_value=[]), \
@@ -150,6 +167,8 @@ class IntelligenceBriefPackageApiTests(unittest.TestCase):
                 content = brief_file.read()
 
         self.assertEqual(package["review_record_id"], "human-review-brief-107")
+        self.assertEqual(package["multi_agent_review_id"], "multi-agent-review-brief-107")
+        self.assertEqual(package["final_approval_status"], "approved_by_gareth")
         self.assertEqual(package["audit_record_id"], "intelligence-brief-audit-brief-107")
         self.assertIn(REQUIRED_DISCLAIMER, content)
         self.assertTrue(data["manual_delivery_only"])

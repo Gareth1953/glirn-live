@@ -13,6 +13,7 @@ os.environ.setdefault(
 
 import app
 import glirn_human_review
+import glirn_multi_agent_review
 import glirn_responses
 import glirn_storage
 import notification_service
@@ -7027,6 +7028,172 @@ class ApiTests(unittest.TestCase):
             )
 
         self.assertEqual(allowed.status_code, 200)
+
+
+class Mission109ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.sections = {
+            name: f"Evidence-led approved content for {name}."
+            for name in glirn_multi_agent_review.CLIENT_CONTENT_SECTIONS
+        }
+        self.brief = {
+            "review_id": "brief-109",
+            "sections": {},
+            "human_review_framework": {"red_flags": {}},
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": False,
+        }
+        self.human_review = {
+            "human_review_id": "human-review-brief-109",
+            "brief_id": "brief-109",
+            "reviewer": "Gareth",
+            "reviewed_at": "2026-06-11T09:00:00+00:00",
+            "outcome": "approved_for_manual_delivery",
+            "approval_rationale": "Mission 106 controls completed.",
+            "approved_for_manual_delivery": True,
+            "delivery_status": "ready_for_manual_delivery",
+            "validation_errors": [],
+            "incomplete_checks": [],
+            "unresolved_red_flags": [],
+        }
+        self.glirn_data = {
+            "intelligence_review_engine": {"generated_reviews": [self.brief]}
+        }
+
+    def cleared_review(self):
+        return {
+            "review_id": "multi-agent-review-brief-109",
+            "brief_id": "brief-109",
+            "review_complete": True,
+            "content_fingerprint": glirn_multi_agent_review.brief_content_fingerprint(self.sections),
+            "escalation_required": False,
+            "unresolved_escalations": [],
+            "review_status": "cleared_for_gareth_approval",
+            "consensus_summary": {
+                "overall_confidence_score": 89.0,
+                "suggested_next_actions": ["Submit the cleared review to Gareth for final approval."],
+            },
+        }
+
+    def test_multi_agent_review_executes_all_roles_and_persists_audit_safe_record(self):
+        stored = []
+
+        def store_record(category, record_id, payload):
+            stored.append((category, record_id, dict(payload)))
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch("app.upsert_record", side_effect=store_record), \
+                patch("app.list_records", return_value=[]), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as approval_event:
+            response = self.client.post(
+                "/glirn/intelligence-briefs/multi-agent-review",
+                json={"brief_id": "brief-109", "sections": self.sections},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        review = data["multi_agent_review"]
+        self.assertEqual(
+            tuple(item["reviewer_role"] for item in review["reviewer_outputs"]),
+            glirn_multi_agent_review.REVIEWER_ROLES,
+        )
+        self.assertEqual(stored[0][0], "multi_agent_review_record")
+        self.assertFalse(review["sensitive_candidate_information_duplicated"])
+        self.assertTrue(data["gareth_final_approval_required"])
+        self.assertFalse(data["delivery_allowed"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_payment_enabled"])
+        self.assertFalse(data["automatic_candidate_outreach_enabled"])
+        self.assertFalse(data["automatic_delivery_enabled"])
+        self.assertFalse(data["external_commitments_enabled"])
+        persist_action.assert_called_once()
+        approval_event.assert_called_once()
+
+    def test_unresolved_escalation_blocks_gareth_final_approval(self):
+        review = self.cleared_review()
+        review["escalation_required"] = True
+        review["unresolved_escalations"] = ["evidence_insufficiency"]
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [review]):
+            response = self.client.post(
+                "/glirn/intelligence-briefs/brief-109/final-approval",
+                json={"action_type": "approve", "reason": "Final review completed."},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("unresolved Mission 109 escalations", response.json()["detail"])
+
+    def test_gareth_final_approval_is_required_and_remains_non_delivery_action(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.cleared_review()]), \
+                patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {}, clear=True), \
+                patch("app.set_state"), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as approval_event:
+            response = self.client.post(
+                "/glirn/intelligence-briefs/brief-109/final-approval",
+                json={"action_type": "approve", "reason": "Gareth approves the reviewed brief."},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["final_approval_status"], "approved_by_gareth")
+        self.assertFalse(data["automatic_delivery_enabled"])
+        self.assertFalse(data["external_commitments_enabled"])
+        persist_action.assert_called_once()
+        approval_event.assert_called_once()
+
+    def test_delivery_package_rejects_missing_review_and_changed_reviewed_content(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []):
+            missing = self.client.post(
+                "/glirn/intelligence-briefs/package",
+                json={"brief_id": "brief-109", "sections": self.sections},
+            )
+        self.assertEqual(missing.status_code, 403)
+        self.assertIn("Mission 109 multi-agent review is required", missing.json()["detail"])
+
+        changed_sections = dict(self.sections)
+        changed_sections["Market Observations"] = "Changed after review."
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.cleared_review()]):
+            changed = self.client.post(
+                "/glirn/intelligence-briefs/package",
+                json={"brief_id": "brief-109", "sections": changed_sections},
+            )
+        self.assertEqual(changed.status_code, 409)
+        self.assertIn("content changed after Mission 109 review", changed.json()["detail"])
+
+    def test_command_centre_surfaces_multi_agent_status_and_escalations(self):
+        review = self.cleared_review()
+        review["escalation_required"] = True
+        review["review_status"] = "escalated_delivery_blocked"
+
+        with patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [review]), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            dashboard_data = app.glirn_dashboard()
+            rendered = app.render_gareth_command_centre(dashboard_data)
+
+        summary = dashboard_data["gareth_command_centre"]["multi_agent_review_summary"]
+        self.assertEqual(summary["review_count"], 1)
+        self.assertEqual(summary["escalated_review_count"], 1)
+        self.assertIn("Multi-Agent Intelligence Review", rendered)
+        self.assertIn("escalated_delivery_blocked", rendered)
+        self.assertIn("Delivery remains manual", rendered)
 
 
 if __name__ == "__main__":

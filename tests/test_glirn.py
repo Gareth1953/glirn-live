@@ -59,6 +59,7 @@ from glirn import (
     apply_client_contact_action,
     build_email_draft_export_engine,
     build_enquiry_notification_summary,
+    build_multi_agent_review_summary,
     build_email_draft_export_object,
     apply_email_draft_export_action,
     build_invoice_draft_export_engine,
@@ -3109,6 +3110,35 @@ class GlirnFoundationTests(unittest.TestCase):
         self.assertFalse(summary["automatic_search_activity_enabled"])
         self.assertFalse(summary["automatic_delivery_enabled"])
         self.assertFalse(summary["external_integrations_enabled"])
+
+    def test_multi_agent_review_summary_tracks_escalations_and_preserves_safeguards(self):
+        summary = build_multi_agent_review_summary([
+            {
+                "review_id": "multi-agent-review-1",
+                "review_complete": True,
+                "review_status": "cleared_for_gareth_approval",
+                "escalation_required": False,
+            },
+            {
+                "review_id": "multi-agent-review-2",
+                "review_complete": True,
+                "review_status": "escalated_delivery_blocked",
+                "escalation_required": True,
+            },
+        ])
+
+        self.assertEqual(summary["review_count"], 2)
+        self.assertEqual(summary["cleared_review_count"], 1)
+        self.assertEqual(summary["escalated_review_count"], 1)
+        self.assertTrue(summary["delivery_blocked"])
+        self.assertTrue(summary["mission_106_approval_required"])
+        self.assertTrue(summary["multi_agent_review_required"])
+        self.assertTrue(summary["gareth_final_approval_required"])
+        self.assertFalse(summary["automatic_acceptance_enabled"])
+        self.assertFalse(summary["automatic_payment_enabled"])
+        self.assertFalse(summary["automatic_candidate_outreach_enabled"])
+        self.assertFalse(summary["automatic_delivery_enabled"])
+        self.assertFalse(summary["external_commitments_enabled"])
 
 
 if __name__ == "__main__":

@@ -6534,6 +6534,32 @@ def build_enquiry_notification_summary(notification_records, enquiry_count=0):
     }
 
 
+def build_multi_agent_review_summary(review_records):
+    records = list(review_records or [])
+    escalated = [item for item in records if item.get("escalation_required")]
+    cleared = [
+        item for item in records
+        if item.get("review_complete") and not item.get("escalation_required")
+    ]
+    return {
+        "review_count": len(records),
+        "completed_review_count": sum(1 for item in records if item.get("review_complete")),
+        "cleared_review_count": len(cleared),
+        "escalated_review_count": len(escalated),
+        "escalated_reviews": escalated,
+        "latest_review_status": records[-1].get("review_status") if records else "not_started",
+        "delivery_blocked": bool(escalated) or not records,
+        "mission_106_approval_required": True,
+        "multi_agent_review_required": True,
+        "gareth_final_approval_required": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
 def get_legal_practice_areas():
     return [
         LegalPracticeArea(code=sector_code(sector), name=sector).to_dict()
