@@ -3,6 +3,7 @@ import hashlib
 import json
 
 from glirn_brief_template import CLIENT_CONTENT_SECTIONS, REQUIRED_DISCLAIMER
+from glirn_confidence_engine import build_evidence_transparency
 
 
 REVIEWER_ROLES = (
@@ -215,6 +216,7 @@ def run_multi_agent_review(brief, human_review, reviewed_at=None):
         review_as_quality_assurance(brief, human_review),
     ]
     consensus = build_consensus_summary(outputs)
+    evidence_transparency = build_evidence_transparency(brief, outputs)
     reviewed_at = reviewed_at or datetime.now(timezone.utc).isoformat()
     return {
         "review_id": f"multi-agent-review-{brief_id}",
@@ -227,6 +229,7 @@ def run_multi_agent_review(brief, human_review, reviewed_at=None):
             item["reviewer_role"]: item["confidence_score"] for item in outputs
         },
         "consensus_summary": consensus,
+        "evidence_transparency": evidence_transparency,
         "review_complete": True,
         "escalation_required": consensus["escalation_required"],
         "unresolved_escalations": consensus["unresolved_escalations"],
@@ -237,6 +240,7 @@ def run_multi_agent_review(brief, human_review, reviewed_at=None):
         "automatic_acceptance_enabled": False,
         "automatic_payment_enabled": False,
         "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
     }

@@ -57,6 +57,10 @@ class MultiAgentReviewTests(unittest.TestCase):
         self.assertFalse(record["delivery_eligible"])
         self.assertTrue(record["gareth_final_approval_required"])
         self.assertFalse(record["sensitive_candidate_information_duplicated"])
+        self.assertIn("evidence_transparency", record)
+        self.assertIn("alternative_interpretations", record["evidence_transparency"])
+        self.assertTrue(record["evidence_transparency"]["candidate_data_minimised"])
+        self.assertFalse(record["evidence_transparency"]["confidential_source_material_duplicated"])
 
     def test_confidence_calculation_and_consensus_summary(self):
         outputs = [

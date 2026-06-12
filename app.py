@@ -18,7 +18,7 @@ from audit_logger import log_route_decision
 from core.provider_guard import provider_allowed
 from core.router import route_task
 from governance_analytics import get_governance_analytics
-from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_deal_pack_export_object, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_invoice_draft_export_object, build_multi_agent_review_summary, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
+from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_confidence_assessment_summary, build_deal_pack_export_object, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_invoice_draft_export_object, build_multi_agent_review_summary, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
 from main import classify_task, load_env_file, load_provider_config, load_runtime_providers
 from agent_safety_gate import REQUEST_APPROVAL, evaluate_agent_action
 from opportunity_scanner import get_scanner_results
@@ -53,6 +53,7 @@ from glirn_brief_template import (
 )
 from notification_service import deliver_enquiry_notification
 from glirn_multi_agent_review import brief_content_fingerprint, run_multi_agent_review
+from glirn_confidence_engine import assess_confidence, render_evidence_transparency_markdown
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -93,6 +94,7 @@ PERSISTED_HUMAN_REVIEWS = []
 PERSISTED_INTELLIGENCE_BRIEFS = []
 PERSISTED_ENQUIRY_NOTIFICATIONS = []
 PERSISTED_MULTI_AGENT_REVIEWS = []
+PERSISTED_CONFIDENCE_ASSESSMENTS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -114,6 +116,7 @@ def reload_persistent_state():
     PERSISTED_INTELLIGENCE_BRIEFS[:] = list_records("intelligence_brief_record")
     PERSISTED_ENQUIRY_NOTIFICATIONS[:] = list_records("enquiry_notification_record")
     PERSISTED_MULTI_AGENT_REVIEWS[:] = list_records("multi_agent_review_record")
+    PERSISTED_CONFIDENCE_ASSESSMENTS[:] = list_records("confidence_assessment_record")
 
 
 reload_persistent_state()
@@ -258,6 +261,21 @@ class GlirnIntelligenceBriefPackageRequest(BaseModel):
 class GlirnMultiAgentReviewRequest(BaseModel):
     brief_id: str
     sections: dict[str, str] = Field(default_factory=dict)
+
+
+class GlirnConfidenceAssessmentRequest(BaseModel):
+    brief_id: str
+    sections: dict[str, str] = Field(default_factory=dict)
+    evidence_sufficiency: float = Field(ge=0, le=100)
+    evidence_quality: float = Field(ge=0, le=100)
+    data_recency: float = Field(ge=0, le=100)
+    market_information_completeness: float = Field(ge=0, le=100)
+    key_evidence_considered: list[str] = Field(default_factory=list)
+    supporting_assumptions: list[str] = Field(default_factory=list)
+    known_limitations: list[str] = Field(default_factory=list)
+    areas_requiring_caution: list[str] = Field(default_factory=list)
+    information_gaps_identified: list[str] = Field(default_factory=list)
+    material_limitations_undermine_conclusions: bool = False
 
 
 class GlirnIntelligenceBriefFinalApprovalRequest(BaseModel):
@@ -2266,6 +2284,8 @@ def render_gareth_command_centre(glirn_data):
     notification_failures = command_centre.get("notification_failures_requiring_attention", []) or []
     multi_agent_summary = command_centre.get("multi_agent_review_summary", {}) or {}
     multi_agent_reviews = command_centre.get("multi_agent_reviews", []) or []
+    confidence_summary = command_centre.get("confidence_assessment_summary", {}) or {}
+    confidence_assessments = command_centre.get("confidence_assessments", []) or []
 
     opportunity_rows = "".join(
         "<tr>"
@@ -2360,6 +2380,20 @@ def render_gareth_command_centre(glirn_data):
         for item in multi_agent_reviews
     ) or '<div class="panel"><p class="muted">No multi-agent intelligence review has been recorded.</p></div>'
 
+    confidence_assessment_cards = "".join(
+        "<article class=\"executive-card\">"
+        f"<h3>{escape(str(item.get('brief_id', 'Intelligence brief')))}</h3>"
+        f"<p><span>Confidence score</span><strong>{escape(str(item.get('confidence_score', 'not assessed')))}</strong></p>"
+        f"<p><span>Confidence category</span><strong>{escape(str(item.get('confidence_category', 'not assessed')))}</strong></p>"
+        f"<p><span>Evidence sufficiency</span><strong>{escape(str(item.get('evidence_sufficiency_rating', 'not assessed')))}</strong></p>"
+        f"<p><span>Reviewer agreement</span><strong>{escape(str((item.get('reviewer_agreement') or {}).get('level', 'not assessed')))}</strong></p>"
+        f"<p><span>Escalation status</span><strong>{escape(str(item.get('assessment_status', 'not_started')))}</strong></p>"
+        f"<p class=\"description\"><span>Outstanding limitations</span>{escape('; '.join(item.get('outstanding_limitations', [])) or 'none')}</p>"
+        "<p class=\"muted\">Confidence below 70 requires remediation and repeat Mission 109 and Mission 110 assessment. Gareth cannot override unresolved escalation.</p>"
+        "</article>"
+        for item in confidence_assessments
+    ) or '<div class="panel"><p class="muted">No Mission 110 confidence assessment has been recorded.</p></div>'
+
     return (
         '<section id="gareth-command-centre" data-default-view="true">'
         '<div class="executive-heading">'
@@ -2373,6 +2407,8 @@ def render_gareth_command_centre(glirn_data):
         f'<div class="executive-metric"><span>Notification failures</span><strong>{notification_summary.get("notification_failure_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Multi-agent reviews</span><strong>{multi_agent_summary.get("review_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Review escalations</span><strong>{multi_agent_summary.get("escalated_review_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Confidence assessments</span><strong>{confidence_summary.get("assessment_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Confidence escalations</span><strong>{confidence_summary.get("escalated_assessment_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Awaiting approval</span><strong>{summary.get("awaiting_approval", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Approved opportunities</span><strong>{summary.get("approved_opportunities", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Proposal packs ready</span><strong>{summary.get("proposal_packs_ready", 0)}</strong></div>'
@@ -2389,6 +2425,8 @@ def render_gareth_command_centre(glirn_data):
         f'{human_review_cards}</div></section>'
         '<section><h2>Multi-Agent Intelligence Review</h2><div class="executive-grid">'
         f'{multi_agent_review_cards}</div></section>'
+        '<section><h2>Confidence &amp; Evidence Transparency</h2><div class="executive-grid">'
+        f'{confidence_assessment_cards}</div></section>'
         '<section><h2>Revenue Opportunities</h2><div class="table-wrap executive-table"><table>'
         '<thead><tr><th>Client/Firm</th><th>Suggested GLIRN service</th><th>Estimated fee</th><th>Priority</th><th>Status</th></tr></thead>'
         f'<tbody>{opportunity_rows}</tbody></table></div></section>'
@@ -3571,10 +3609,17 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     intelligence_engine["multi_agent_review_records"] = multi_agent_reviews
     intelligence_engine["latest_multi_agent_review"] = multi_agent_reviews[-1] if multi_agent_reviews else None
     intelligence_engine["multi_agent_review_summary"] = multi_agent_summary
+    confidence_assessments = list(PERSISTED_CONFIDENCE_ASSESSMENTS)
+    confidence_summary = build_confidence_assessment_summary(confidence_assessments)
+    intelligence_engine["confidence_assessment_records"] = confidence_assessments
+    intelligence_engine["latest_confidence_assessment"] = confidence_assessments[-1] if confidence_assessments else None
+    intelligence_engine["confidence_assessment_summary"] = confidence_summary
     glirn_data["intelligence_review_engine"] = intelligence_engine
     glirn_data["human_review_records"] = human_reviews
     glirn_data["multi_agent_review_records"] = multi_agent_reviews
     glirn_data["multi_agent_review_summary"] = multi_agent_summary
+    glirn_data["confidence_assessment_records"] = confidence_assessments
+    glirn_data["confidence_assessment_summary"] = confidence_summary
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3599,6 +3644,9 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["multi_agent_review_summary"] = multi_agent_summary
     glirn_data["gareth_command_centre"]["multi_agent_reviews"] = multi_agent_reviews
     glirn_data["gareth_command_centre"]["escalated_multi_agent_reviews"] = multi_agent_summary["escalated_reviews"]
+    glirn_data["gareth_command_centre"]["confidence_assessment_summary"] = confidence_summary
+    glirn_data["gareth_command_centre"]["confidence_assessments"] = confidence_assessments
+    glirn_data["gareth_command_centre"]["escalated_confidence_assessments"] = confidence_summary["escalated_assessments"]
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -4465,6 +4513,7 @@ def generate_glirn_multi_agent_review(
         "automatic_acceptance_enabled": False,
         "automatic_payment_enabled": False,
         "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
         "capital_execution": False,
@@ -4478,6 +4527,122 @@ def generate_glirn_multi_agent_review(
         "automatic_acceptance_enabled": False,
         "automatic_payment_enabled": False,
         "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
+@app.post("/glirn/intelligence-briefs/confidence-assessment")
+def generate_glirn_confidence_assessment(
+    request: GlirnConfidenceAssessmentRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    glirn_data = get_glirn_dashboard_data(
+        pending_approvals=list_pending_approvals(),
+        public_leads=PUBLIC_LEADS,
+    )
+    briefs = glirn_data.get("intelligence_review_engine", {}).get("generated_reviews", []) or []
+    brief = next((item for item in briefs if item.get("review_id") == request.brief_id.strip()), None)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="intelligence brief not found")
+    human_reviews = [
+        record for record in PERSISTED_HUMAN_REVIEWS
+        if record.get("brief_id") == brief.get("review_id")
+    ]
+    human_review = human_reviews[-1] if human_reviews else None
+    if human_review is None:
+        raise HTTPException(status_code=403, detail="Mission 106 human review is required before confidence assessment")
+    multi_agent_reviews = [
+        record for record in PERSISTED_MULTI_AGENT_REVIEWS
+        if record.get("brief_id") == brief.get("review_id")
+    ]
+    multi_agent_review = multi_agent_reviews[-1] if multi_agent_reviews else None
+    if multi_agent_review is None or not multi_agent_review.get("review_complete"):
+        raise HTTPException(status_code=403, detail="Mission 109 multi-agent review is required before confidence assessment")
+    requested_fingerprint = brief_content_fingerprint(request.sections)
+    if multi_agent_review.get("content_fingerprint") != requested_fingerprint:
+        raise HTTPException(status_code=409, detail="brief content changed after Mission 109 review")
+
+    review_brief = dict(brief)
+    review_brief["sections"] = {
+        **(brief.get("sections") or {}),
+        **request.sections,
+        "Required Disclaimer": REQUIRED_DISCLAIMER,
+    }
+    evidence_transparency = {
+        "key_evidence_considered": request.key_evidence_considered,
+        "supporting_assumptions": request.supporting_assumptions,
+        "known_limitations": request.known_limitations,
+        "areas_requiring_caution": request.areas_requiring_caution,
+        "information_gaps_identified": request.information_gaps_identified,
+    }
+    try:
+        record = assess_confidence(
+            review_brief,
+            human_review,
+            multi_agent_review,
+            request.evidence_sufficiency,
+            request.evidence_quality,
+            request.data_recency,
+            request.market_information_completeness,
+            evidence_transparency=evidence_transparency,
+            material_limitations_undermine_conclusions=request.material_limitations_undermine_conclusions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    upsert_record("confidence_assessment_record", record["confidence_assessment_id"], record)
+    PERSISTED_CONFIDENCE_ASSESSMENTS[:] = list_records("confidence_assessment_record")
+    persist_safe_action(
+        "intelligence_brief_confidence_assessment",
+        record["confidence_assessment_id"],
+        brief_id=record["brief_id"],
+        mission_106_review_id=record["mission_106_review_id"],
+        mission_109_review_id=record["mission_109_review_id"],
+        confidence_score=record["confidence_score"],
+        confidence_category=record["confidence_category"],
+        evidence_sufficiency_rating=record["evidence_sufficiency_rating"],
+        reviewer_agreement_level=record["reviewer_agreement"]["level"],
+        escalation_required=record["escalation_required"],
+        unresolved_escalations=record["unresolved_escalations"],
+        confidential_source_material_logged=False,
+        candidate_sensitive_information_logged=False,
+        automatic_delivery_enabled=False,
+        external_commitments_enabled=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_intelligence_brief_confidence_assessment",
+        "approval_id": record["confidence_assessment_id"],
+        "decision": record["assessment_status"].upper(),
+        "provider": "glirn_confidence_engine",
+        "task_type": "intelligence_brief_confidence_assessment",
+        "brief_id": record["brief_id"],
+        "mission_109_review_id": record["mission_109_review_id"],
+        "confidence_score": record["confidence_score"],
+        "confidence_category": record["confidence_category"],
+        "escalation_required": record["escalation_required"],
+        "gareth_override_allowed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "confidence_assessment_completed",
+        "confidence_assessment": record,
+        "gareth_final_approval_required": True,
+        "gareth_override_allowed": False,
+        "delivery_allowed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
     }
@@ -4501,6 +4666,23 @@ def record_glirn_intelligence_brief_final_approval(
         raise HTTPException(status_code=403, detail="Mission 109 multi-agent review is required before final approval")
     if review.get("escalation_required") or review.get("unresolved_escalations"):
         raise HTTPException(status_code=403, detail="unresolved Mission 109 escalations block final approval")
+    confidence_assessments = [
+        item for item in PERSISTED_CONFIDENCE_ASSESSMENTS if item.get("brief_id") == brief_id
+    ]
+    confidence_assessment = confidence_assessments[-1] if confidence_assessments else None
+    if confidence_assessment is None or not confidence_assessment.get("assessment_complete"):
+        raise HTTPException(status_code=403, detail="Mission 110 confidence assessment is required before final approval")
+    if confidence_assessment.get("mission_109_review_id") != review.get("review_id"):
+        raise HTTPException(status_code=409, detail="Mission 110 assessment must be repeated after Mission 109 review")
+    if confidence_assessment.get("content_fingerprint") != review.get("content_fingerprint"):
+        raise HTTPException(status_code=409, detail="Mission 110 assessment must be repeated after Mission 109 review")
+    if confidence_assessment.get("escalation_required") or confidence_assessment.get("unresolved_escalations"):
+        raise HTTPException(
+            status_code=403,
+            detail="unresolved Mission 110 escalations require remediation and Mission 109 and Mission 110 reassessment",
+        )
+    if float(confidence_assessment.get("confidence_score", 0)) < 70:
+        raise HTTPException(status_code=403, detail="confidence below 70 blocks final approval")
 
     final_approval_id = f"intelligence-brief-final-approval-{brief_id}"
     status_map = {
@@ -4516,9 +4698,14 @@ def record_glirn_intelligence_brief_final_approval(
         final_approval_id,
         brief_id=brief_id,
         multi_agent_review_id=review["review_id"],
+        confidence_assessment_id=confidence_assessment["confidence_assessment_id"],
         final_approval_status=final_status,
         reason=request.reason.strip(),
         gareth_final_decision=True,
+        automatic_acceptance_enabled=False,
+        automatic_payment_enabled=False,
+        automatic_candidate_outreach_enabled=False,
+        automatic_search_activity_enabled=False,
         automatic_delivery_enabled=False,
         external_commitments_enabled=False,
     )
@@ -4530,8 +4717,13 @@ def record_glirn_intelligence_brief_final_approval(
         "task_type": "intelligence_brief_final_approval",
         "brief_id": brief_id,
         "multi_agent_review_id": review["review_id"],
+        "confidence_assessment_id": confidence_assessment["confidence_assessment_id"],
         "reason": request.reason.strip(),
         "gareth_final_decision": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
         "capital_execution": False,
@@ -4542,7 +4734,12 @@ def record_glirn_intelligence_brief_final_approval(
         "final_approval_id": final_approval_id,
         "brief_id": brief_id,
         "multi_agent_review_id": review["review_id"],
+        "confidence_assessment_id": confidence_assessment["confidence_assessment_id"],
         "final_approval_status": final_status,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
     }
@@ -4584,6 +4781,25 @@ def generate_glirn_intelligence_brief_package(
     if multi_agent_review.get("content_fingerprint") != brief_content_fingerprint(request.sections):
         raise HTTPException(status_code=409, detail="brief content changed after Mission 109 review")
 
+    matching_confidence_assessments = [
+        record for record in PERSISTED_CONFIDENCE_ASSESSMENTS
+        if record.get("brief_id") == brief.get("review_id")
+    ]
+    confidence_assessment = matching_confidence_assessments[-1] if matching_confidence_assessments else None
+    if confidence_assessment is None or not confidence_assessment.get("assessment_complete"):
+        raise HTTPException(status_code=403, detail="Mission 110 confidence assessment is required before delivery packaging")
+    if confidence_assessment.get("mission_109_review_id") != multi_agent_review.get("review_id"):
+        raise HTTPException(status_code=409, detail="Mission 110 assessment must be repeated after Mission 109 review")
+    if confidence_assessment.get("content_fingerprint") != brief_content_fingerprint(request.sections):
+        raise HTTPException(status_code=409, detail="brief content changed after Mission 110 assessment")
+    if confidence_assessment.get("escalation_required") or confidence_assessment.get("unresolved_escalations"):
+        raise HTTPException(
+            status_code=403,
+            detail="unresolved Mission 110 escalations require remediation and Mission 109 and Mission 110 reassessment",
+        )
+    if float(confidence_assessment.get("confidence_score", 0)) < 70:
+        raise HTTPException(status_code=403, detail="confidence below 70 blocks delivery packaging")
+
     expected_final_approval_id = f"intelligence-brief-final-approval-{brief.get('review_id')}"
     requested_final_approval_id = (request.final_approval_id or expected_final_approval_id).strip()
     if requested_final_approval_id != expected_final_approval_id:
@@ -4602,6 +4818,17 @@ def generate_glirn_intelligence_brief_package(
     except IntelligenceBriefValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    evidence_markdown = render_evidence_transparency_markdown(confidence_assessment)
+    package["confidence_assessment_id"] = confidence_assessment["confidence_assessment_id"]
+    package["confidence_score"] = confidence_assessment["confidence_score"]
+    package["confidence_category"] = confidence_assessment["confidence_category"]
+    package["evidence_transparency"] = confidence_assessment["evidence_transparency"]
+    package["sections"]["Confidence and Evidence Transparency"] = evidence_markdown
+    package["markdown"] = package["markdown"].replace(
+        "Delivery status: Ready for manual delivery only.",
+        f"{evidence_markdown}\n\nDelivery status: Ready for manual delivery only.",
+    )
+
     os.makedirs(GLIRN_INTELLIGENCE_BRIEFS_DIR, exist_ok=True)
     local_file_path = os.path.join(
         GLIRN_INTELLIGENCE_BRIEFS_DIR,
@@ -4614,6 +4841,7 @@ def generate_glirn_intelligence_brief_package(
         **package,
         "local_file_path": local_file_path,
         "multi_agent_review_id": multi_agent_review["review_id"],
+        "confidence_assessment_id": confidence_assessment["confidence_assessment_id"],
         "final_approval_id": expected_final_approval_id,
         "final_approval_status": "approved_by_gareth",
     }
@@ -4622,12 +4850,19 @@ def generate_glirn_intelligence_brief_package(
         "brief_record_id": package["brief_record_id"],
         "review_record_id": package["review_record_id"],
         "multi_agent_review_id": multi_agent_review["review_id"],
+        "confidence_assessment_id": confidence_assessment["confidence_assessment_id"],
+        "confidence_score": confidence_assessment["confidence_score"],
+        "confidence_category": confidence_assessment["confidence_category"],
         "final_approval_id": expected_final_approval_id,
         "event_type": "intelligence_brief_package_generated",
         "generated_at": package["generated_at"],
         "reviewer_identity": package["reviewer_identity"],
         "review_date": package["review_date"],
         "manual_delivery_only": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_delivery_enabled": False,
     }
@@ -4640,6 +4875,9 @@ def generate_glirn_intelligence_brief_package(
         brief_record_id=package["brief_record_id"],
         review_record_id=package["review_record_id"],
         multi_agent_review_id=multi_agent_review["review_id"],
+        confidence_assessment_id=confidence_assessment["confidence_assessment_id"],
+        confidence_score=confidence_assessment["confidence_score"],
+        confidence_category=confidence_assessment["confidence_category"],
         final_approval_id=expected_final_approval_id,
         reviewer_identity=package["reviewer_identity"],
         review_date=package["review_date"],
@@ -4657,6 +4895,9 @@ def generate_glirn_intelligence_brief_package(
         "brief_record_id": package["brief_record_id"],
         "review_record_id": package["review_record_id"],
         "multi_agent_review_id": multi_agent_review["review_id"],
+        "confidence_assessment_id": confidence_assessment["confidence_assessment_id"],
+        "confidence_score": confidence_assessment["confidence_score"],
+        "confidence_category": confidence_assessment["confidence_category"],
         "final_approval_id": expected_final_approval_id,
         "reviewer_identity": package["reviewer_identity"],
         "review_date": package["review_date"],
@@ -4673,7 +4914,12 @@ def generate_glirn_intelligence_brief_package(
         "intelligence_brief_package": brief_record,
         "audit_record": audit_record,
         "manual_delivery_only": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
         "external_delivery_enabled": False,
         "email_sending_enabled": False,
         "external_upload_enabled": False,

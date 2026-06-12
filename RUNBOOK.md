@@ -525,6 +525,20 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Confidence scoring and evidence transparency
+
+Mission 110 adds a separate confidence assessment after Mission 109. Submit it through `POST /glirn/intelligence-briefs/confidence-assessment` using the exact content reviewed in Mission 109. The weighted score covers evidence sufficiency, evidence quality, reviewer agreement, escalation presence, Mission 106 outcome, candidate consent completeness, data recency, and market information completeness.
+
+Confidence categories are Very High Confidence (90-100), High Confidence (75-89), Moderate Confidence (60-74), and Low Confidence (below 60). Any score below 70 creates an unresolved escalation. Inadequate evidence sufficiency, significant reviewer disagreement, material limitations that undermine conclusions, unresolved Mission 109 escalation, invalid Mission 106 approval, or incomplete candidate consent also create Mission 110 escalations.
+
+Mission 110 records include key evidence considered, supporting assumptions, known limitations, caution areas, information gaps, and alternative interpretations identified in Mission 109. Contact details are redacted from summaries, candidate-data minimisation remains mandatory, and audit-safe records contain ratings and outcomes without copying confidential source material.
+
+Gareth cannot directly override an unresolved Mission 110 escalation. The brief must be remediated, reassessed through Mission 109, and reassessed through Mission 110 before final approval. Delivery packaging requires valid Mission 106 approval, completed and escalation-free Mission 109 review, completed and escalation-free Mission 110 assessment of the same content with confidence of at least 70, and Gareth's final approval.
+
+The generated local Markdown package includes confidence score, confidence category, evidence sufficiency, reviewer agreement, limitations, caution areas, information gaps, and alternative interpretations. Acceptance, payment, candidate outreach, search activity, delivery, and external commitments remain manual and disabled.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Enquiry notification framework
 
 Mission 108 sends an informational notification to `legalintelligencerecruitment@outlook.com` after a valid website enquiry and its response records have been persisted. The notification uses the configured `GLIRN_SMTP_HOST`, `GLIRN_SMTP_PORT`, `GLIRN_SMTP_USERNAME`, `GLIRN_SMTP_PASSWORD`, and `GLIRN_FROM_EMAIL` settings.

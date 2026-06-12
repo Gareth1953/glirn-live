@@ -54,6 +54,34 @@ def cleared_multi_agent_review(brief_id="brief-107"):
     }
 
 
+def cleared_confidence_assessment(brief_id="brief-107"):
+    return {
+        "confidence_assessment_id": f"confidence-assessment-{brief_id}",
+        "brief_id": brief_id,
+        "mission_109_review_id": f"multi-agent-review-{brief_id}",
+        "content_fingerprint": brief_content_fingerprint(complete_sections()),
+        "assessment_complete": True,
+        "confidence_score": 88,
+        "confidence_category": "High Confidence",
+        "evidence_sufficiency_rating": 90,
+        "reviewer_agreement": {"level": "High"},
+        "outstanding_limitations": ["Market information remains time-sensitive."],
+        "evidence_transparency": {
+            "key_evidence_considered": ["Reviewed market observations."],
+            "supporting_assumptions": ["Market conditions remain comparable."],
+            "known_limitations": ["Market information remains time-sensitive."],
+            "areas_requiring_caution": ["Validate observations before action."],
+            "information_gaps_identified": ["No material gaps identified."],
+            "alternative_interpretations": ["Alternative demand conditions were considered."],
+            "candidate_data_minimised": True,
+            "confidential_source_material_duplicated": False,
+        },
+        "escalation_required": False,
+        "unresolved_escalations": [],
+        "assessment_status": "cleared_for_gareth_approval",
+    }
+
+
 class IntelligenceBriefTemplateTests(unittest.TestCase):
     def test_package_contains_every_required_section_and_review_identity(self):
         package = build_intelligence_brief_package(
@@ -145,6 +173,7 @@ class IntelligenceBriefPackageApiTests(unittest.TestCase):
                 patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
                 patch.object(app, "PERSISTED_HUMAN_REVIEWS", [approved_review()]), \
                 patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [cleared_multi_agent_review()]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [cleared_confidence_assessment()]), \
                 patch.object(app, "PERSISTED_INTELLIGENCE_BRIEFS", []), \
                 patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {
                     "intelligence-brief-final-approval-brief-107": "approved_by_gareth",
@@ -168,9 +197,13 @@ class IntelligenceBriefPackageApiTests(unittest.TestCase):
 
         self.assertEqual(package["review_record_id"], "human-review-brief-107")
         self.assertEqual(package["multi_agent_review_id"], "multi-agent-review-brief-107")
+        self.assertEqual(package["confidence_assessment_id"], "confidence-assessment-brief-107")
+        self.assertEqual(package["confidence_category"], "High Confidence")
         self.assertEqual(package["final_approval_status"], "approved_by_gareth")
         self.assertEqual(package["audit_record_id"], "intelligence-brief-audit-brief-107")
         self.assertIn(REQUIRED_DISCLAIMER, content)
+        self.assertIn("Confidence and Evidence Transparency", content)
+        self.assertIn("Alternative interpretations identified during Mission 109 review", content)
         self.assertTrue(data["manual_delivery_only"])
         self.assertFalse(data["automatic_delivery_enabled"])
         self.assertFalse(data["external_delivery_enabled"])

@@ -13,6 +13,7 @@ os.environ.setdefault(
 
 import app
 import glirn_human_review
+import glirn_confidence_engine
 import glirn_multi_agent_review
 import glirn_responses
 import glirn_storage
@@ -7076,6 +7077,31 @@ class Mission109ApiTests(unittest.TestCase):
             },
         }
 
+    def cleared_confidence_assessment(self):
+        return {
+            "confidence_assessment_id": "confidence-assessment-brief-109",
+            "brief_id": "brief-109",
+            "mission_109_review_id": "multi-agent-review-brief-109",
+            "content_fingerprint": glirn_multi_agent_review.brief_content_fingerprint(self.sections),
+            "assessment_complete": True,
+            "confidence_score": 88,
+            "confidence_category": "High Confidence",
+            "evidence_sufficiency_rating": 90,
+            "reviewer_agreement": {"level": "High"},
+            "outstanding_limitations": ["Market observations are time-sensitive."],
+            "evidence_transparency": {
+                "key_evidence_considered": ["Reviewed market observations."],
+                "supporting_assumptions": ["Market conditions remain comparable."],
+                "known_limitations": ["Market observations are time-sensitive."],
+                "areas_requiring_caution": ["Validate observations before action."],
+                "information_gaps_identified": ["No material gaps identified."],
+                "alternative_interpretations": ["Alternative demand conditions were considered."],
+            },
+            "escalation_required": False,
+            "unresolved_escalations": [],
+            "assessment_status": "cleared_for_gareth_approval",
+        }
+
     def test_multi_agent_review_executes_all_roles_and_persists_audit_safe_record(self):
         stored = []
 
@@ -7133,6 +7159,7 @@ class Mission109ApiTests(unittest.TestCase):
     def test_gareth_final_approval_is_required_and_remains_non_delivery_action(self):
         with patch.dict("os.environ", {}, clear=True), \
                 patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.cleared_review()]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.cleared_confidence_assessment()]), \
                 patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {}, clear=True), \
                 patch("app.set_state"), \
                 patch("app.persist_safe_action") as persist_action, \
@@ -7184,6 +7211,7 @@ class Mission109ApiTests(unittest.TestCase):
 
         with patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [review]), \
                 patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
                 patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
             dashboard_data = app.glirn_dashboard()
             rendered = app.render_gareth_command_centre(dashboard_data)
@@ -7194,6 +7222,244 @@ class Mission109ApiTests(unittest.TestCase):
         self.assertIn("Multi-Agent Intelligence Review", rendered)
         self.assertIn("escalated_delivery_blocked", rendered)
         self.assertIn("Delivery remains manual", rendered)
+
+
+class Mission110ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.sections = {
+            name: f"Evidence-led approved content for {name}."
+            for name in glirn_multi_agent_review.CLIENT_CONTENT_SECTIONS
+        }
+        self.brief = {
+            "review_id": "brief-110",
+            "sections": {},
+            "human_review_framework": {"red_flags": {}},
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": False,
+        }
+        self.human_review = {
+            "human_review_id": "human-review-brief-110",
+            "brief_id": "brief-110",
+            "reviewer": "Gareth",
+            "reviewed_at": "2026-06-12T09:00:00+00:00",
+            "outcome": "approved_for_manual_delivery",
+            "approval_rationale": "Mission 106 controls completed.",
+            "approved_for_manual_delivery": True,
+            "delivery_status": "ready_for_manual_delivery",
+            "validation_errors": [],
+            "incomplete_checks": [],
+            "unresolved_red_flags": [],
+        }
+        self.multi_agent_review = {
+            "review_id": "multi-agent-review-brief-110",
+            "brief_id": "brief-110",
+            "mission_106_review_id": "human-review-brief-110",
+            "review_complete": True,
+            "content_fingerprint": glirn_multi_agent_review.brief_content_fingerprint(self.sections),
+            "reviewer_outputs": [
+                {
+                    "reviewer_role": role,
+                    "confidence_score": 90,
+                    "findings": ["Reviewed."],
+                    "concerns": ["Alternative interpretation."] if "Devil" in role else [],
+                    "recommendations": ["Validate material observations."],
+                }
+                for role in glirn_multi_agent_review.REVIEWER_ROLES
+            ],
+            "escalation_required": False,
+            "unresolved_escalations": [],
+            "review_status": "cleared_for_gareth_approval",
+        }
+        self.glirn_data = {"intelligence_review_engine": {"generated_reviews": [self.brief]}}
+
+    def assessment_payload(self, rating=90, material_limitations=False):
+        return {
+            "brief_id": "brief-110",
+            "sections": self.sections,
+            "evidence_sufficiency": rating,
+            "evidence_quality": rating,
+            "data_recency": rating,
+            "market_information_completeness": rating,
+            "key_evidence_considered": ["Market source contact source@example.com."],
+            "supporting_assumptions": ["Demand remains stable."],
+            "known_limitations": ["Market information is time-sensitive."],
+            "areas_requiring_caution": ["Validate before acting."],
+            "information_gaps_identified": ["No material gap identified."],
+            "material_limitations_undermine_conclusions": material_limitations,
+        }
+
+    def cleared_assessment(self):
+        return glirn_confidence_engine.assess_confidence(
+            self.brief,
+            self.human_review,
+            self.multi_agent_review,
+            90,
+            90,
+            90,
+            90,
+        )
+
+    def test_confidence_assessment_requires_mission_106_and_mission_109(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []):
+            no_human = self.client.post(
+                "/glirn/intelligence-briefs/confidence-assessment",
+                json=self.assessment_payload(),
+            )
+        self.assertEqual(no_human.status_code, 403)
+        self.assertIn("Mission 106", no_human.json()["detail"])
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []):
+            no_multi = self.client.post(
+                "/glirn/intelligence-briefs/confidence-assessment",
+                json=self.assessment_payload(),
+            )
+        self.assertEqual(no_multi.status_code, 403)
+        self.assertIn("Mission 109", no_multi.json()["detail"])
+
+    def test_confidence_assessment_persists_transparency_but_audit_avoids_source_content(self):
+        stored = []
+
+        def store_record(category, record_id, payload):
+            stored.append((category, record_id, dict(payload)))
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.multi_agent_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch("app.upsert_record", side_effect=store_record), \
+                patch("app.list_records", return_value=[]), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as approval_event:
+            response = self.client.post(
+                "/glirn/intelligence-briefs/confidence-assessment",
+                json=self.assessment_payload(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        assessment = data["confidence_assessment"]
+        self.assertEqual(stored[0][0], "confidence_assessment_record")
+        self.assertIn("[redacted email]", assessment["evidence_transparency"]["key_evidence_considered"][0])
+        self.assertIn("alternative_interpretations", assessment["evidence_transparency"])
+        audit_payload = persist_action.call_args.kwargs
+        self.assertNotIn("key_evidence_considered", audit_payload)
+        self.assertNotIn("known_limitations", audit_payload)
+        self.assertFalse(audit_payload["confidential_source_material_logged"])
+        self.assertFalse(audit_payload["candidate_sensitive_information_logged"])
+        self.assertFalse(data["gareth_override_allowed"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_payment_enabled"])
+        self.assertFalse(data["automatic_candidate_outreach_enabled"])
+        self.assertFalse(data["automatic_search_activity_enabled"])
+        self.assertFalse(data["automatic_delivery_enabled"])
+        self.assertFalse(data["external_commitments_enabled"])
+        approval_event.assert_called_once()
+
+    def test_low_confidence_blocks_gareth_approval_without_override(self):
+        low = glirn_confidence_engine.assess_confidence(
+            self.brief,
+            self.human_review,
+            self.multi_agent_review,
+            20,
+            20,
+            20,
+            20,
+        )
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.multi_agent_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [low]):
+            response = self.client.post(
+                "/glirn/intelligence-briefs/brief-110/final-approval",
+                json={"action_type": "approve", "reason": "Attempt direct Gareth override."},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("remediation and Mission 109 and Mission 110 reassessment", response.json()["detail"])
+        self.assertFalse(low["gareth_override_allowed"])
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.multi_agent_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [low]), \
+                patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {
+                    "intelligence-brief-final-approval-brief-110": "approved_by_gareth",
+                }, clear=True):
+            package = self.client.post(
+                "/glirn/intelligence-briefs/package",
+                json={"brief_id": "brief-110", "sections": self.sections},
+            )
+
+        self.assertEqual(package.status_code, 403)
+        self.assertIn("remediation and Mission 109 and Mission 110 reassessment", package.json()["detail"])
+
+    def test_final_approval_and_package_cannot_bypass_mission_110(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.multi_agent_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []):
+            approval = self.client.post(
+                "/glirn/intelligence-briefs/brief-110/final-approval",
+                json={"action_type": "approve", "reason": "Attempt without Mission 110."},
+            )
+        self.assertEqual(approval.status_code, 403)
+        self.assertIn("Mission 110 confidence assessment is required", approval.json()["detail"])
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.multi_agent_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []):
+            package = self.client.post(
+                "/glirn/intelligence-briefs/package",
+                json={"brief_id": "brief-110", "sections": self.sections},
+            )
+        self.assertEqual(package.status_code, 403)
+        self.assertIn("Mission 110 confidence assessment is required", package.json()["detail"])
+
+    def test_mission_110_must_be_repeated_after_mission_109_content_changes(self):
+        assessment = self.cleared_assessment()
+        reassessed_review = dict(self.multi_agent_review)
+        reassessed_review["content_fingerprint"] = "new-mission-109-fingerprint"
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [reassessed_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [assessment]):
+            response = self.client.post(
+                "/glirn/intelligence-briefs/brief-110/final-approval",
+                json={"action_type": "approve", "reason": "Attempt using stale Mission 110 assessment."},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Mission 110 assessment must be repeated", response.json()["detail"])
+
+    def test_command_centre_displays_confidence_evidence_and_escalation_status(self):
+        assessment = self.cleared_assessment()
+        with patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [assessment]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.multi_agent_review]), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [self.human_review]), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            dashboard_data = app.glirn_dashboard()
+            rendered = app.render_gareth_command_centre(dashboard_data)
+
+        summary = dashboard_data["gareth_command_centre"]["confidence_assessment_summary"]
+        self.assertEqual(summary["latest_confidence_category"], assessment["confidence_category"])
+        self.assertIn("Confidence &amp; Evidence Transparency", rendered)
+        self.assertIn("Evidence sufficiency", rendered)
+        self.assertIn("Reviewer agreement", rendered)
+        self.assertIn("Outstanding limitations", rendered)
+        self.assertIn("Gareth cannot override unresolved escalation", rendered)
 
 
 if __name__ == "__main__":

@@ -6555,6 +6555,42 @@ def build_multi_agent_review_summary(review_records):
         "automatic_acceptance_enabled": False,
         "automatic_payment_enabled": False,
         "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
+def build_confidence_assessment_summary(assessment_records):
+    records = list(assessment_records or [])
+    escalated = [item for item in records if item.get("escalation_required")]
+    cleared = [
+        item for item in records
+        if item.get("assessment_complete") and not item.get("escalation_required")
+    ]
+    latest = records[-1] if records else {}
+    return {
+        "assessment_count": len(records),
+        "completed_assessment_count": sum(1 for item in records if item.get("assessment_complete")),
+        "cleared_assessment_count": len(cleared),
+        "escalated_assessment_count": len(escalated),
+        "escalated_assessments": escalated,
+        "latest_confidence_score": latest.get("confidence_score"),
+        "latest_confidence_category": latest.get("confidence_category", "not_assessed"),
+        "latest_evidence_sufficiency_rating": latest.get("evidence_sufficiency_rating"),
+        "latest_reviewer_agreement_level": (latest.get("reviewer_agreement") or {}).get("level", "not_assessed"),
+        "latest_outstanding_limitations": latest.get("outstanding_limitations", []),
+        "latest_escalation_status": latest.get("assessment_status", "not_started"),
+        "delivery_blocked": not records or bool(escalated),
+        "mission_106_approval_required": True,
+        "mission_109_review_required": True,
+        "mission_110_assessment_required": True,
+        "gareth_final_approval_required": True,
+        "gareth_override_allowed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_activity_enabled": False,
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
     }
