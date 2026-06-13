@@ -6632,6 +6632,39 @@ def build_global_intelligence_summary(validation_records):
     }
 
 
+def build_decline_decision_summary(recommendation_records, decision_records=None):
+    recommendations = list(recommendation_records or [])
+    decisions = list(decision_records or [])
+    decision_by_recommendation = {
+        item.get("recommendation_id"): item for item in decisions
+    }
+    awaiting = [
+        item for item in recommendations
+        if item.get("recommendation_id") not in decision_by_recommendation
+    ]
+    latest = recommendations[-1] if recommendations else {}
+    return {
+        "recommendation_count": len(recommendations),
+        "accept_recommendation_count": sum(1 for item in recommendations if item.get("recommendation") == "ACCEPT"),
+        "decline_recommendation_count": sum(1 for item in recommendations if item.get("recommendation") == "DECLINE"),
+        "more_information_count": sum(1 for item in recommendations if item.get("recommendation") == "MORE_INFORMATION_REQUIRED"),
+        "awaiting_gareth_approval_count": len(awaiting),
+        "awaiting_gareth_approval": awaiting,
+        "final_decision_count": len(decisions),
+        "latest_recommendation": latest.get("recommendation", "not_assessed"),
+        "gareth_final_approval_required": True,
+        "recommendation_only": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_decline_enabled": False,
+        "automatic_referral_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_commitments_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
 def get_legal_practice_areas():
     return [
         LegalPracticeArea(code=sector_code(sector), name=sector).to_dict()

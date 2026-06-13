@@ -69,6 +69,7 @@ from glirn import (
     apply_invoice_draft_export_action,
     build_deal_pack_export_engine,
     build_deal_pack_export_object,
+    build_decline_decision_summary,
     apply_deal_pack_export_action,
     build_revenue_ledger_engine,
     build_gareth_command_centre,
@@ -3202,6 +3203,32 @@ class GlirnFoundationTests(unittest.TestCase):
         self.assertTrue(summary["gareth_final_approval_required"])
         self.assertFalse(summary["gareth_override_allowed"])
         self.assertFalse(summary["automatic_acceptance_enabled"])
+        self.assertFalse(summary["automatic_payment_enabled"])
+        self.assertFalse(summary["automatic_candidate_outreach_enabled"])
+        self.assertFalse(summary["automatic_search_commitments_enabled"])
+        self.assertFalse(summary["automatic_delivery_enabled"])
+        self.assertFalse(summary["external_commitments_enabled"])
+
+    def test_decline_decision_summary_tracks_recommendations_and_gareth_decisions(self):
+        recommendations = [
+            {"recommendation_id": "rec-1", "recommendation": "ACCEPT"},
+            {"recommendation_id": "rec-2", "recommendation": "DECLINE"},
+            {"recommendation_id": "rec-3", "recommendation": "MORE_INFORMATION_REQUIRED"},
+        ]
+        decisions = [{"recommendation_id": "rec-2", "final_decision": "DECLINE"}]
+        summary = build_decline_decision_summary(recommendations, decisions)
+
+        self.assertEqual(summary["recommendation_count"], 3)
+        self.assertEqual(summary["accept_recommendation_count"], 1)
+        self.assertEqual(summary["decline_recommendation_count"], 1)
+        self.assertEqual(summary["more_information_count"], 1)
+        self.assertEqual(summary["awaiting_gareth_approval_count"], 2)
+        self.assertEqual(summary["final_decision_count"], 1)
+        self.assertTrue(summary["gareth_final_approval_required"])
+        self.assertTrue(summary["recommendation_only"])
+        self.assertFalse(summary["automatic_acceptance_enabled"])
+        self.assertFalse(summary["automatic_decline_enabled"])
+        self.assertFalse(summary["automatic_referral_enabled"])
         self.assertFalse(summary["automatic_payment_enabled"])
         self.assertFalse(summary["automatic_candidate_outreach_enabled"])
         self.assertFalse(summary["automatic_search_commitments_enabled"])

@@ -525,6 +525,20 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Should We Decline decision engine
+
+Mission 112 provides an advisory pre-engagement decision framework across Client Fit, Ethical Risk, Commercial Viability, Reputation Risk, and Delivery Confidence. Generate a recommendation through `POST /glirn/decline-decisions/recommendations` with a 0-100 score and concise evidence summary for each factor.
+
+The engine produces `ACCEPT`, `DECLINE`, or `MORE_INFORMATION_REQUIRED`. High ethical or reputation risk and materially insufficient fit, viability, or delivery confidence produce a decline recommendation. Missing evidence, borderline suitability, or moderate risk produces a request for more information. Acceptance requires strong fit, viability, and delivery confidence with controlled ethical and reputation risk.
+
+Every recommendation includes the five scores, redacted evidence summaries, missing evidence, transparent factor-by-factor reasoning, trigger codes, and an optional referral recommendation. Referral guidance is advisory only; no referral contact is executed automatically.
+
+Recommendations never accept or decline work. Gareth must record the final decision through `POST /glirn/decline-decisions/{recommendation_id}/gareth-decision`, selecting `ACCEPT`, `DECLINE`, or `MORE_INFORMATION_REQUIRED` and providing a rationale. Recording a decision creates no client response, referral, payment, outreach, search commitment, delivery, or external commitment.
+
+Recommendation and final-decision records are persisted locally. Audit-safe events contain identifiers, scores, recommendation or decision, and trigger codes without copying detailed evidence or confidential source material.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Global legal intelligence engine
 
 Mission 111 adds jurisdiction-aware, high-level hiring intelligence for the United Kingdom, United Arab Emirates, Singapore, European Union, and United States. Submit a validation through `POST /glirn/intelligence-briefs/global-intelligence` after Mission 110 using the exact brief content assessed by Mission 110.

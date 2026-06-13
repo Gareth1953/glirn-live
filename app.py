@@ -18,7 +18,7 @@ from audit_logger import log_route_decision
 from core.provider_guard import provider_allowed
 from core.router import route_task
 from governance_analytics import get_governance_analytics
-from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_confidence_assessment_summary, build_deal_pack_export_object, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_global_intelligence_summary, build_invoice_draft_export_object, build_multi_agent_review_summary, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
+from glirn import apply_autonomous_internal_operations_action, apply_candidate_consent_action, apply_client_contact_action, apply_client_terms_action, apply_deal_pack_export_action, apply_email_draft_export_action, apply_final_approval_action, apply_first_client_dry_run_action, apply_first_client_readiness_decision, apply_invoice_draft_action, apply_invoice_draft_export_action, apply_launch_compliance_action, apply_launch_readiness_decision, apply_manual_delivery_action, apply_public_lead_action, apply_revenue_ledger_action, build_client_contact_readiness_object, build_confidence_assessment_summary, build_deal_pack_export_object, build_decline_decision_summary, build_email_draft_export_object, build_enquiry_notification_summary, build_gareth_command_centre, build_global_intelligence_summary, build_invoice_draft_export_object, build_multi_agent_review_summary, build_public_lead_record, build_revenue_approval_package_for_lead, build_revenue_ledger_engine, flag_deletion_request, get_glirn_dashboard_data
 from main import classify_task, load_env_file, load_provider_config, load_runtime_providers
 from agent_safety_gate import REQUEST_APPROVAL, evaluate_agent_action
 from opportunity_scanner import get_scanner_results
@@ -55,6 +55,7 @@ from notification_service import deliver_enquiry_notification
 from glirn_multi_agent_review import brief_content_fingerprint, run_multi_agent_review
 from glirn_confidence_engine import assess_confidence, render_evidence_transparency_markdown
 from glirn_global_intelligence import generate_global_legal_intelligence, render_global_intelligence_markdown
+from glirn_decline_decision import apply_gareth_decision, evaluate_decline_decision
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -97,6 +98,8 @@ PERSISTED_ENQUIRY_NOTIFICATIONS = []
 PERSISTED_MULTI_AGENT_REVIEWS = []
 PERSISTED_CONFIDENCE_ASSESSMENTS = []
 PERSISTED_GLOBAL_INTELLIGENCE = []
+PERSISTED_DECLINE_RECOMMENDATIONS = []
+PERSISTED_DECLINE_DECISIONS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -120,6 +123,8 @@ def reload_persistent_state():
     PERSISTED_MULTI_AGENT_REVIEWS[:] = list_records("multi_agent_review_record")
     PERSISTED_CONFIDENCE_ASSESSMENTS[:] = list_records("confidence_assessment_record")
     PERSISTED_GLOBAL_INTELLIGENCE[:] = list_records("global_intelligence_record")
+    PERSISTED_DECLINE_RECOMMENDATIONS[:] = list_records("decline_recommendation_record")
+    PERSISTED_DECLINE_DECISIONS[:] = list_records("decline_decision_record")
 
 
 reload_persistent_state()
@@ -295,6 +300,20 @@ class GlirnGlobalIntelligenceRequest(BaseModel):
     jurisdiction_expertise_limitations: bool = False
     evidence_insufficiency_identified: bool = False
     exceeds_glirn_expertise_boundaries: bool = False
+
+
+class GlirnDeclineRecommendationRequest(BaseModel):
+    enquiry_id: str
+    factor_scores: dict[str, float] = Field(default_factory=dict)
+    evidence: dict[str, str] = Field(default_factory=dict)
+    referral_suitable: bool = False
+    referral_type: str | None = None
+    referral_reason: str | None = None
+
+
+class GlirnDeclineFinalDecisionRequest(BaseModel):
+    final_decision: str
+    rationale: str
 
 
 class GlirnIntelligenceBriefFinalApprovalRequest(BaseModel):
@@ -2307,6 +2326,9 @@ def render_gareth_command_centre(glirn_data):
     confidence_assessments = command_centre.get("confidence_assessments", []) or []
     global_intelligence_summary = command_centre.get("global_intelligence_summary", {}) or {}
     global_intelligence_records = command_centre.get("global_intelligence_records", []) or []
+    decline_decision_summary = command_centre.get("decline_decision_summary", {}) or {}
+    decline_recommendations = command_centre.get("decline_recommendations", []) or []
+    decline_decisions = command_centre.get("decline_decisions", []) or []
 
     opportunity_rows = "".join(
         "<tr>"
@@ -2428,6 +2450,35 @@ def render_gareth_command_centre(glirn_data):
         for item in global_intelligence_records
     ) or '<div class="panel"><p class="muted">No Mission 111 jurisdiction intelligence validation has been recorded.</p></div>'
 
+    decline_recommendation_cards = "".join(
+        "<article class=\"executive-card\">"
+        f"<h3>{escape(str(item.get('enquiry_id', 'Enquiry')))}</h3>"
+        f"<p><span>Recommendation</span><strong>{escape(str(item.get('recommendation', 'not assessed')))}</strong></p>"
+        f"<p><span>Client fit</span><strong>{escape(str((item.get('factor_scores') or {}).get('client_fit', 'n/a')))}</strong></p>"
+        f"<p><span>Ethical risk</span><strong>{escape(str((item.get('factor_scores') or {}).get('ethical_risk', 'n/a')))}</strong></p>"
+        f"<p><span>Commercial viability</span><strong>{escape(str((item.get('factor_scores') or {}).get('commercial_viability', 'n/a')))}</strong></p>"
+        f"<p><span>Reputation risk</span><strong>{escape(str((item.get('factor_scores') or {}).get('reputation_risk', 'n/a')))}</strong></p>"
+        f"<p><span>Delivery confidence</span><strong>{escape(str((item.get('factor_scores') or {}).get('delivery_confidence', 'n/a')))}</strong></p>"
+        f"<p class=\"description\"><span>Reasoning</span>{escape('; '.join(item.get('transparent_reasoning', [])) or 'Not recorded.')}</p>"
+        f"<p><span>Referral suggested</span><strong>{escape(str((item.get('referral_recommendation') or {}).get('recommended', False)))}</strong></p>"
+        f"<p><span>Approval status</span><strong>{escape(str(item.get('final_decision_status', 'awaiting_gareth_approval')))}</strong></p>"
+        "<p class=\"muted\">Recommendation only. Gareth must record the final decision; no acceptance, decline, referral, or external action occurs automatically.</p>"
+        "</article>"
+        for item in decline_recommendations
+    ) or '<div class="panel"><p class="muted">No Should We Decline recommendation has been recorded.</p></div>'
+
+    decline_decision_cards = "".join(
+        "<article class=\"executive-card\">"
+        f"<h3>{escape(str(item.get('enquiry_id', 'Enquiry')))}</h3>"
+        f"<p><span>System recommendation</span><strong>{escape(str(item.get('system_recommendation', 'not recorded')))}</strong></p>"
+        f"<p><span>Gareth final decision</span><strong>{escape(str(item.get('final_decision', 'not recorded')))}</strong></p>"
+        f"<p><span>Decision by</span><strong>{escape(str(item.get('decision_by', 'not recorded')))}</strong></p>"
+        f"<p class=\"description\"><span>Rationale</span>{escape(str(item.get('decision_rationale', 'Not recorded.')))}</p>"
+        "<p class=\"muted\">Decision recorded locally. Any external response or referral remains manual.</p>"
+        "</article>"
+        for item in decline_decisions
+    ) or '<div class="panel"><p class="muted">No Gareth final decline decision has been recorded.</p></div>'
+
     return (
         '<section id="gareth-command-centre" data-default-view="true">'
         '<div class="executive-heading">'
@@ -2445,6 +2496,8 @@ def render_gareth_command_centre(glirn_data):
         f'<div class="executive-metric"><span>Confidence escalations</span><strong>{confidence_summary.get("escalated_assessment_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Jurisdiction validations</span><strong>{global_intelligence_summary.get("validation_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Jurisdiction escalations</span><strong>{global_intelligence_summary.get("escalated_validation_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Decline recommendations</span><strong>{decline_decision_summary.get("recommendation_count", 0)}</strong></div>'
+        f'<div class="executive-metric"><span>Decline decisions awaiting Gareth</span><strong>{decline_decision_summary.get("awaiting_gareth_approval_count", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Awaiting approval</span><strong>{summary.get("awaiting_approval", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Approved opportunities</span><strong>{summary.get("approved_opportunities", 0)}</strong></div>'
         f'<div class="executive-metric"><span>Proposal packs ready</span><strong>{summary.get("proposal_packs_ready", 0)}</strong></div>'
@@ -2465,6 +2518,10 @@ def render_gareth_command_centre(glirn_data):
         f'{confidence_assessment_cards}</div></section>'
         '<section><h2>Global Legal Intelligence</h2><div class="executive-grid">'
         f'{global_intelligence_cards}</div></section>'
+        '<section><h2>Should We Decline?</h2><div class="executive-grid">'
+        f'{decline_recommendation_cards}</div></section>'
+        '<section><h2>Gareth Decline Decisions</h2><div class="executive-grid">'
+        f'{decline_decision_cards}</div></section>'
         '<section><h2>Revenue Opportunities</h2><div class="table-wrap executive-table"><table>'
         '<thead><tr><th>Client/Firm</th><th>Suggested GLIRN service</th><th>Estimated fee</th><th>Priority</th><th>Status</th></tr></thead>'
         f'<tbody>{opportunity_rows}</tbody></table></div></section>'
@@ -3665,6 +3722,15 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["confidence_assessment_summary"] = confidence_summary
     glirn_data["global_intelligence_records"] = global_intelligence_records
     glirn_data["global_intelligence_summary"] = global_intelligence_summary
+    decline_recommendations = list(PERSISTED_DECLINE_RECOMMENDATIONS)
+    decline_decisions = list(PERSISTED_DECLINE_DECISIONS)
+    decline_decision_summary = build_decline_decision_summary(
+        decline_recommendations,
+        decline_decisions,
+    )
+    glirn_data["decline_recommendations"] = decline_recommendations
+    glirn_data["decline_decisions"] = decline_decisions
+    glirn_data["decline_decision_summary"] = decline_decision_summary
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3695,6 +3761,9 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["global_intelligence_summary"] = global_intelligence_summary
     glirn_data["gareth_command_centre"]["global_intelligence_records"] = global_intelligence_records
     glirn_data["gareth_command_centre"]["escalated_global_intelligence"] = global_intelligence_summary["escalated_validations"]
+    glirn_data["gareth_command_centre"]["decline_decision_summary"] = decline_decision_summary
+    glirn_data["gareth_command_centre"]["decline_recommendations"] = decline_recommendations
+    glirn_data["gareth_command_centre"]["decline_decisions"] = decline_decisions
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -4791,6 +4860,151 @@ def generate_glirn_global_intelligence(
         "gareth_override_allowed": False,
         "delivery_allowed": False,
         "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_commitments_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
+@app.post("/glirn/decline-decisions/recommendations")
+def generate_glirn_decline_recommendation(
+    request: GlirnDeclineRecommendationRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        record = evaluate_decline_decision(
+            request.enquiry_id,
+            request.factor_scores,
+            request.evidence,
+            referral_suitable=request.referral_suitable,
+            referral_type=request.referral_type,
+            referral_reason=request.referral_reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    upsert_record("decline_recommendation_record", record["recommendation_id"], record)
+    PERSISTED_DECLINE_RECOMMENDATIONS[:] = list_records("decline_recommendation_record")
+    persist_safe_action(
+        "decline_decision_recommendation",
+        record["recommendation_id"],
+        enquiry_id=record["enquiry_id"],
+        factor_scores=record["factor_scores"],
+        recommendation=record["recommendation"],
+        recommendation_reasons=record["recommendation_reasons"],
+        referral_recommended=record["referral_recommendation"]["recommended"],
+        gareth_final_approval_required=True,
+        detailed_evidence_logged=False,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_decline_decision_recommendation",
+        "approval_id": record["recommendation_id"],
+        "decision": record["recommendation"],
+        "provider": "glirn_decline_decision_engine",
+        "task_type": "should_we_decline_recommendation",
+        "enquiry_id": record["enquiry_id"],
+        "factor_scores": record["factor_scores"],
+        "recommendation_reasons": record["recommendation_reasons"],
+        "gareth_final_approval_required": True,
+        "recommendation_only": True,
+        "automatic_acceptance_enabled": False,
+        "automatic_decline_enabled": False,
+        "automatic_referral_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_commitments_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "decline_recommendation_generated",
+        "recommendation": record,
+        "final_decision_status": "awaiting_gareth_approval",
+        "gareth_final_approval_required": True,
+        "automatic_action_executed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_decline_enabled": False,
+        "automatic_referral_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_commitments_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
+@app.post("/glirn/decline-decisions/{recommendation_id}/gareth-decision")
+def record_glirn_decline_final_decision(
+    recommendation_id: str,
+    request: GlirnDeclineFinalDecisionRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    recommendation = next(
+        (
+            item for item in PERSISTED_DECLINE_RECOMMENDATIONS
+            if item.get("recommendation_id") == recommendation_id
+        ),
+        None,
+    )
+    if recommendation is None:
+        raise HTTPException(status_code=404, detail="decline recommendation not found")
+    try:
+        decision = apply_gareth_decision(
+            recommendation,
+            request.final_decision,
+            request.rationale,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    upsert_record("decline_decision_record", decision["decision_id"], decision)
+    PERSISTED_DECLINE_DECISIONS[:] = list_records("decline_decision_record")
+    persist_safe_action(
+        "decline_decision_gareth_approval",
+        decision["decision_id"],
+        recommendation_id=decision["recommendation_id"],
+        enquiry_id=decision["enquiry_id"],
+        system_recommendation=decision["system_recommendation"],
+        final_decision=decision["final_decision"],
+        decision_by="Gareth",
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_decline_final_decision",
+        "approval_id": decision["decision_id"],
+        "decision": decision["final_decision"],
+        "provider": "gareth_final_approval",
+        "task_type": "should_we_decline_final_decision",
+        "recommendation_id": decision["recommendation_id"],
+        "enquiry_id": decision["enquiry_id"],
+        "system_recommendation": decision["system_recommendation"],
+        "decision_by": "Gareth",
+        "automatic_action_executed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_decline_enabled": False,
+        "automatic_referral_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_commitments_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+        "capital_execution": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "gareth_final_decision_recorded",
+        "decision": decision,
+        "automatic_action_executed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_decline_enabled": False,
+        "automatic_referral_enabled": False,
         "automatic_payment_enabled": False,
         "automatic_candidate_outreach_enabled": False,
         "automatic_search_commitments_enabled": False,

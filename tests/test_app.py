@@ -14,6 +14,7 @@ os.environ.setdefault(
 import app
 import glirn_human_review
 import glirn_confidence_engine
+import glirn_decline_decision
 import glirn_global_intelligence
 import glirn_multi_agent_review
 import glirn_responses
@@ -7706,6 +7707,190 @@ class Mission111ApiTests(unittest.TestCase):
         self.assertIn("Evidence sufficiency", rendered)
         self.assertIn("Intelligence limitations", rendered)
         self.assertIn("Mission 111 escalation blocks", rendered)
+
+
+class Mission112ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.factor_scores = {
+            "client_fit": 82,
+            "ethical_risk": 18,
+            "commercial_viability": 76,
+            "reputation_risk": 22,
+            "delivery_confidence": 84,
+        }
+        self.evidence = {
+            factor: f"Reviewed evidence for {factor}."
+            for factor in glirn_decline_decision.DECISION_FACTORS
+        }
+
+    def test_recommendation_endpoint_persists_transparent_advisory_record_and_audit(self):
+        stored = []
+
+        def store_record(category, record_id, payload):
+            stored.append((category, record_id, dict(payload)))
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_DECLINE_RECOMMENDATIONS", []), \
+                patch("app.upsert_record", side_effect=store_record), \
+                patch("app.list_records", return_value=[]), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as approval_event:
+            response = self.client.post(
+                "/glirn/decline-decisions/recommendations",
+                json={
+                    "enquiry_id": "enquiry-112",
+                    "factor_scores": self.factor_scores,
+                    "evidence": self.evidence,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        recommendation = data["recommendation"]
+        self.assertEqual(recommendation["recommendation"], "ACCEPT")
+        self.assertTrue(recommendation["transparent_reasoning"])
+        self.assertEqual(stored[0][0], "decline_recommendation_record")
+        audit_payload = persist_action.call_args.kwargs
+        self.assertNotIn("evidence_summary", audit_payload)
+        self.assertNotIn("transparent_reasoning", audit_payload)
+        self.assertFalse(audit_payload["detailed_evidence_logged"])
+        self.assertEqual(data["final_decision_status"], "awaiting_gareth_approval")
+        self.assertTrue(data["gareth_final_approval_required"])
+        self.assertFalse(data["automatic_action_executed"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_decline_enabled"])
+        self.assertFalse(data["automatic_referral_enabled"])
+        approval_event.assert_called_once()
+
+    def test_decline_and_more_information_recommendations_generate(self):
+        cases = [
+            ({**self.factor_scores, "ethical_risk": 85}, "DECLINE"),
+            ({**self.factor_scores, "delivery_confidence": 60}, "MORE_INFORMATION_REQUIRED"),
+        ]
+        for factor_scores, expected in cases:
+            with self.subTest(expected=expected), \
+                    patch.dict("os.environ", {}, clear=True), \
+                    patch.object(app, "PERSISTED_DECLINE_RECOMMENDATIONS", []), \
+                    patch("app.upsert_record"), \
+                    patch("app.list_records", return_value=[]), \
+                    patch("app.persist_safe_action"), \
+                    patch("app.record_approval_event"):
+                response = self.client.post(
+                    "/glirn/decline-decisions/recommendations",
+                    json={
+                        "enquiry_id": "enquiry-112",
+                        "factor_scores": factor_scores,
+                        "evidence": self.evidence,
+                    },
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["recommendation"]["recommendation"], expected)
+
+    def test_optional_referral_remains_recommendation_only(self):
+        decline_scores = {**self.factor_scores, "ethical_risk": 85}
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_DECLINE_RECOMMENDATIONS", []), \
+                patch("app.upsert_record"), \
+                patch("app.list_records", return_value=[]), \
+                patch("app.persist_safe_action"), \
+                patch("app.record_approval_event"):
+            response = self.client.post(
+                "/glirn/decline-decisions/recommendations",
+                json={
+                    "enquiry_id": "enquiry-112",
+                    "factor_scores": decline_scores,
+                    "evidence": self.evidence,
+                    "referral_suitable": True,
+                    "referral_type": "Independent specialist adviser",
+                    "referral_reason": "Specialist support may be more appropriate.",
+                },
+            )
+
+        referral = response.json()["recommendation"]["referral_recommendation"]
+        self.assertTrue(referral["recommended"])
+        self.assertFalse(referral["external_contact_executed"])
+        self.assertTrue(referral["gareth_approval_required"])
+        self.assertFalse(response.json()["automatic_referral_enabled"])
+
+    def test_final_decision_cannot_be_recorded_without_existing_recommendation(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_DECLINE_RECOMMENDATIONS", []):
+            response = self.client.post(
+                "/glirn/decline-decisions/missing/gareth-decision",
+                json={"final_decision": "DECLINE", "rationale": "Reviewed by Gareth."},
+            )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_gareth_final_decision_is_persisted_without_automatic_action(self):
+        recommendation = glirn_decline_decision.evaluate_decline_decision(
+            "enquiry-112", self.factor_scores, self.evidence
+        )
+        stored = []
+
+        def store_record(category, record_id, payload):
+            stored.append((category, record_id, dict(payload)))
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_DECLINE_RECOMMENDATIONS", [recommendation]), \
+                patch.object(app, "PERSISTED_DECLINE_DECISIONS", []), \
+                patch("app.upsert_record", side_effect=store_record), \
+                patch("app.list_records", return_value=[]), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as approval_event:
+            response = self.client.post(
+                f"/glirn/decline-decisions/{recommendation['recommendation_id']}/gareth-decision",
+                json={
+                    "final_decision": "MORE_INFORMATION_REQUIRED",
+                    "rationale": "Gareth requires clarification of the proposed scope.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        decision = data["decision"]
+        self.assertEqual(decision["decision_by"], "Gareth")
+        self.assertEqual(decision["final_decision"], "MORE_INFORMATION_REQUIRED")
+        self.assertTrue(decision["gareth_approved"])
+        self.assertEqual(stored[0][0], "decline_decision_record")
+        self.assertFalse(data["automatic_action_executed"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_decline_enabled"])
+        self.assertFalse(data["automatic_referral_enabled"])
+        self.assertFalse(data["automatic_payment_enabled"])
+        self.assertFalse(data["automatic_candidate_outreach_enabled"])
+        self.assertFalse(data["automatic_search_commitments_enabled"])
+        self.assertFalse(data["automatic_delivery_enabled"])
+        self.assertFalse(data["external_commitments_enabled"])
+        persist_action.assert_called_once()
+        approval_event.assert_called_once()
+
+    def test_command_centre_displays_recommendation_reasoning_and_gareth_decision(self):
+        recommendation = glirn_decline_decision.evaluate_decline_decision(
+            "enquiry-112", self.factor_scores, self.evidence
+        )
+        decision = glirn_decline_decision.apply_gareth_decision(
+            recommendation, "ACCEPT", "Gareth approves proceeding to the next manual review stage."
+        )
+        with patch.object(app, "PERSISTED_DECLINE_RECOMMENDATIONS", [recommendation]), \
+                patch.object(app, "PERSISTED_DECLINE_DECISIONS", [decision]), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            dashboard_data = app.glirn_dashboard()
+            rendered = app.render_gareth_command_centre(dashboard_data)
+
+        summary = dashboard_data["gareth_command_centre"]["decline_decision_summary"]
+        self.assertEqual(summary["recommendation_count"], 1)
+        self.assertEqual(summary["final_decision_count"], 1)
+        self.assertIn("Should We Decline?", rendered)
+        self.assertIn("Client fit", rendered)
+        self.assertIn("Ethical risk", rendered)
+        self.assertIn("Gareth final decision", rendered)
+        self.assertIn("Recommendation only", rendered)
 
 
 if __name__ == "__main__":
