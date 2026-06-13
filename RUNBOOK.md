@@ -525,6 +525,20 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Opportunity intelligence engine
+
+Mission 114 analyses explicitly submitted public-source signals; it does not crawl websites or retrieve data automatically. Record signals through `POST /glirn/opportunity-intelligence/signals` for law firm growth, partner movement, practice area expansion, or recruitment demand.
+
+Source authority is weighted as follows: official firm announcements and regulatory filings are Very High (95); professional associations and major legal publications are High (85); recruiter reports are Medium (65); industry discussions are Low (35). Signal strength, corroboration, and evidence completeness are combined with source authority to generate a transparent opportunity confidence score.
+
+Generate an advisory recommendation through `POST /glirn/opportunity-intelligence/recommendations`. Recommendations explain their confidence inputs, cite the submitted signal identifiers, and remain pending Gareth approval. Gareth may record `APPROVE_FOR_MANUAL_REVIEW`, `MONITOR`, or `REJECT` through `POST /glirn/opportunity-intelligence/{intelligence_id}/gareth-decision`.
+
+Approval permits manual review only. No endpoint performs outreach, prospecting, referral, marketing, payment, delivery, external retrieval, or an external commitment. Audit events store identifiers, categories, source classes, scores, and approval outcomes without copying signal narratives or decision rationales.
+
+All Missions 105-113A safeguards remain mandatory.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Internal learning system
 
 Mission 113 records Gareth's decisions and completed-brief outcomes through `POST /glirn/learning/outcomes`. Records capture the brief outcome, decline reason codes, and remediation result using minimised, redacted summaries. They do not train or modify an autonomous decision system.

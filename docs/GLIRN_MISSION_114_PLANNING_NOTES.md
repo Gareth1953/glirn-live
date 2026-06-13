@@ -1,6 +1,6 @@
 # Mission 114 Planning Notes
 
-Status: Planning only. Not approved for implementation.
+Status: Superseded by Gareth's approved Mission 114 Opportunity Intelligence Engine specification.
 
 ## Proposed Title
 
@@ -41,4 +41,4 @@ Introduce a governed process for converting approved Mission 113 insights and Mi
 
 ## Approval Boundary
 
-These notes define a possible Mission 114 only. No Mission 114 code, API, persistence category, dashboard control, or automated workflow may be created until Gareth provides explicit approval.
+These earlier planning notes are retained for audit history. They do not describe the approved Mission 114 scope, which is the Opportunity Intelligence Engine documented in the runbook.

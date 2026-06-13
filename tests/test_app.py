@@ -8036,5 +8036,111 @@ class Mission113AApiTests(unittest.TestCase):
         self.assertEqual(approval_response.status_code, 404)
 
 
+class Mission114ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.signals = []
+        self.recommendations = []
+        self.decisions = []
+
+    def _records(self, category):
+        return {
+            "opportunity_signal_record": self.signals,
+            "opportunity_intelligence_record": self.recommendations,
+            "opportunity_intelligence_decision_record": self.decisions,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        self._records(category).append(dict(payload))
+
+    def _signal_payload(self, signal_id="signal-114", source_type="official_firm_announcement"):
+        return {
+            "signal_id": signal_id,
+            "category": "law_firm_growth",
+            "source_type": source_type,
+            "title": "Firm announces growth",
+            "publisher": "Example Law Firm",
+            "source_url": "https://example.org/growth",
+            "publication_date": "2026-06-13",
+            "signal_summary": "The firm announced expansion in London.",
+            "organisation": "Example Law Firm",
+            "jurisdiction": "United Kingdom",
+            "practice_area": "Corporate",
+            "signal_strength": 85,
+        }
+
+    def test_signal_recommendation_and_gareth_decision_flow_is_advisory_only(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_SIGNALS", self.signals), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_INTELLIGENCE", self.recommendations), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_DECISIONS", self.decisions), \
+                patch("app.upsert_record", side_effect=self._upsert), \
+                patch("app.list_records", side_effect=self._records), \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event") as approval_audit:
+            signal_response = self.client.post(
+                "/glirn/opportunity-intelligence/signals", json=self._signal_payload()
+            )
+            recommendation_response = self.client.post(
+                "/glirn/opportunity-intelligence/recommendations",
+                json={"signal_ids": ["signal-114"]},
+            )
+            recommendation = recommendation_response.json()["recommendation"]
+            decision_response = self.client.post(
+                f"/glirn/opportunity-intelligence/{recommendation['opportunity_intelligence_id']}/gareth-decision",
+                json={
+                    "decision": "APPROVE_FOR_MANUAL_REVIEW",
+                    "rationale": "Gareth approves manual qualification review only.",
+                },
+            )
+
+        self.assertEqual(signal_response.status_code, 200)
+        self.assertEqual(signal_response.json()["signal"]["source_confidence"], "Very High")
+        self.assertEqual(recommendation_response.status_code, 200)
+        self.assertTrue(recommendation["recommendation_only"])
+        self.assertTrue(recommendation["gareth_approval_required"])
+        self.assertEqual(decision_response.status_code, 200)
+        decision = decision_response.json()["decision"]
+        self.assertEqual(decision["decision_by"], "Gareth")
+        self.assertTrue(decision["manual_review_only"])
+        self.assertFalse(decision["automatic_action_executed"])
+        self.assertNotIn("signal_summary", audit.call_args_list[0].kwargs)
+        self.assertNotIn("decision_rationale", audit.call_args_list[-1].kwargs)
+        self.assertEqual(approval_audit.call_count, 2)
+
+    def test_missing_signals_and_recommendations_block_progression(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_SIGNALS", []), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_INTELLIGENCE", []):
+            recommendation_response = self.client.post(
+                "/glirn/opportunity-intelligence/recommendations",
+                json={"signal_ids": ["missing"]},
+            )
+            decision_response = self.client.post(
+                "/glirn/opportunity-intelligence/missing/gareth-decision",
+                json={"decision": "MONITOR", "rationale": "No recommendation exists."},
+            )
+        self.assertEqual(recommendation_response.status_code, 404)
+        self.assertEqual(decision_response.status_code, 404)
+
+    def test_dashboard_exposes_manual_only_opportunity_summary(self):
+        with patch.object(app, "PERSISTED_OPPORTUNITY_SIGNALS", [{"signal_id": "signal-114"}]), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_INTELLIGENCE", [{
+                    "opportunity_intelligence_id": "opportunity-114"
+                }]), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_DECISIONS", []), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            data = app.glirn_dashboard()
+        summary = data["gareth_command_centre"]["opportunity_intelligence_summary"]
+        self.assertEqual(summary["signal_count"], 1)
+        self.assertEqual(summary["awaiting_gareth_approval_count"], 1)
+        self.assertTrue(summary["gareth_approval_required"])
+        self.assertFalse(summary["autonomous_prospecting_enabled"])
+
+
 if __name__ == "__main__":
     unittest.main()

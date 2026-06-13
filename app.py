@@ -66,6 +66,11 @@ from glirn_external_learning import (
     generate_external_intelligence,
     ingest_public_evidence,
 )
+from glirn_opportunity_intelligence import (
+    apply_gareth_opportunity_decision,
+    generate_opportunity_recommendation,
+    record_opportunity_signal,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -116,6 +121,9 @@ PERSISTED_LEARNING_APPROVALS = []
 PERSISTED_EXTERNAL_EVIDENCE = []
 PERSISTED_EXTERNAL_INTELLIGENCE = []
 PERSISTED_KNOWLEDGE_UPDATES = []
+PERSISTED_OPPORTUNITY_SIGNALS = []
+PERSISTED_OPPORTUNITY_INTELLIGENCE = []
+PERSISTED_OPPORTUNITY_DECISIONS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -147,6 +155,9 @@ def reload_persistent_state():
     PERSISTED_EXTERNAL_EVIDENCE[:] = list_records("external_evidence_record")
     PERSISTED_EXTERNAL_INTELLIGENCE[:] = list_records("external_intelligence_learning_record")
     PERSISTED_KNOWLEDGE_UPDATES[:] = list_records("knowledge_base_record")
+    PERSISTED_OPPORTUNITY_SIGNALS[:] = list_records("opportunity_signal_record")
+    PERSISTED_OPPORTUNITY_INTELLIGENCE[:] = list_records("opportunity_intelligence_record")
+    PERSISTED_OPPORTUNITY_DECISIONS[:] = list_records("opportunity_intelligence_decision_record")
 
 
 reload_persistent_state()
@@ -369,6 +380,30 @@ class GlirnExternalIntelligenceRequest(BaseModel):
 
 
 class GlirnKnowledgeUpdateApprovalRequest(BaseModel):
+    rationale: str
+
+
+class GlirnOpportunitySignalRequest(BaseModel):
+    signal_id: str
+    category: str
+    source_type: str
+    title: str
+    publisher: str
+    source_url: str
+    publication_date: str
+    signal_summary: str
+    organisation: str
+    jurisdiction: str
+    practice_area: str | None = None
+    signal_strength: float = 70
+
+
+class GlirnOpportunityRecommendationRequest(BaseModel):
+    signal_ids: list[str] = Field(default_factory=list)
+
+
+class GlirnOpportunityDecisionRequest(BaseModel):
+    decision: str
     rationale: str
 
 
@@ -3807,8 +3842,25 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
         "legal_advice_provided": False,
         "automatic_regulatory_updates_enabled": False,
     }
+    decided_opportunity_ids = {
+        item.get("opportunity_intelligence_id") for item in PERSISTED_OPPORTUNITY_DECISIONS
+    }
+    opportunity_intelligence_summary = {
+        "signal_count": len(PERSISTED_OPPORTUNITY_SIGNALS),
+        "recommendation_count": len(PERSISTED_OPPORTUNITY_INTELLIGENCE),
+        "decision_count": len(PERSISTED_OPPORTUNITY_DECISIONS),
+        "awaiting_gareth_approval_count": sum(
+            1 for item in PERSISTED_OPPORTUNITY_INTELLIGENCE
+            if item.get("opportunity_intelligence_id") not in decided_opportunity_ids
+        ),
+        "gareth_approval_required": True,
+        "recommendation_only": True,
+        "autonomous_prospecting_enabled": False,
+    }
     glirn_data["internal_learning_summary"] = learning_summary
     glirn_data["external_learning_summary"] = external_learning_summary
+    glirn_data["opportunity_intelligence_summary"] = opportunity_intelligence_summary
+    glirn_data["opportunity_intelligence_records"] = list(PERSISTED_OPPORTUNITY_INTELLIGENCE)
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3846,6 +3898,9 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["learning_insights"] = list(PERSISTED_LEARNING_INSIGHTS)
     glirn_data["gareth_command_centre"]["external_learning_summary"] = external_learning_summary
     glirn_data["gareth_command_centre"]["external_intelligence_learning"] = list(PERSISTED_EXTERNAL_INTELLIGENCE)
+    glirn_data["gareth_command_centre"]["opportunity_intelligence_summary"] = opportunity_intelligence_summary
+    glirn_data["gareth_command_centre"]["opportunity_intelligence_records"] = list(PERSISTED_OPPORTUNITY_INTELLIGENCE)
+    glirn_data["gareth_command_centre"]["opportunity_intelligence_decisions"] = list(PERSISTED_OPPORTUNITY_DECISIONS)
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -5307,6 +5362,155 @@ def approve_glirn_knowledge_update(
         "autonomous_execution": False,
     })
     return {"status": "knowledge_update_approved_for_manual_use", "knowledge_update": update}
+
+
+@app.post("/glirn/opportunity-intelligence/signals")
+def record_glirn_opportunity_signal(
+    request: GlirnOpportunitySignalRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        signal = record_opportunity_signal(
+            request.signal_id,
+            request.category,
+            request.source_type,
+            request.title,
+            request.publisher,
+            request.source_url,
+            request.publication_date,
+            request.signal_summary,
+            request.organisation,
+            request.jurisdiction,
+            request.practice_area,
+            request.signal_strength,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("opportunity_signal_record", signal["signal_id"], signal)
+    PERSISTED_OPPORTUNITY_SIGNALS[:] = list_records("opportunity_signal_record")
+    persist_safe_action(
+        "glirn_opportunity_signal_recorded",
+        signal["signal_id"],
+        category=signal["category"],
+        source_type=signal["source_type"],
+        source_confidence=signal["source_confidence"],
+        source_weight=signal["source_weight"],
+        signal_strength=signal["signal_strength"],
+        organisation=signal["organisation"],
+        sensitive_signal_summary_logged=False,
+        external_retrieval_executed=False,
+        automatic_action_executed=False,
+    )
+    return {"status": "opportunity_signal_recorded", "signal": signal}
+
+
+@app.post("/glirn/opportunity-intelligence/recommendations")
+def generate_glirn_opportunity_intelligence(
+    request: GlirnOpportunityRecommendationRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    requested_ids = set(request.signal_ids)
+    signals = [item for item in PERSISTED_OPPORTUNITY_SIGNALS if item.get("signal_id") in requested_ids]
+    if not requested_ids or len(signals) != len(requested_ids):
+        raise HTTPException(status_code=404, detail="one or more opportunity signals were not found")
+    try:
+        recommendation = generate_opportunity_recommendation(signals)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record(
+        "opportunity_intelligence_record",
+        recommendation["opportunity_intelligence_id"],
+        recommendation,
+    )
+    PERSISTED_OPPORTUNITY_INTELLIGENCE[:] = list_records("opportunity_intelligence_record")
+    persist_safe_action(
+        "glirn_opportunity_recommendation_generated",
+        recommendation["opportunity_intelligence_id"],
+        organisation=recommendation["organisation"],
+        categories=recommendation["categories"],
+        signal_ids=recommendation["signal_ids"],
+        source_count=recommendation["source_count"],
+        confidence_score=recommendation["confidence_score"],
+        confidence_category=recommendation["confidence_category"],
+        priority=recommendation["priority"],
+        recommendation_only=True,
+        detailed_evidence_logged=False,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_opportunity_intelligence_recommendation",
+        "approval_id": recommendation["opportunity_intelligence_id"],
+        "decision": "awaiting_gareth_approval",
+        "provider": "glirn_opportunity_intelligence_engine",
+        "task_type": "public_opportunity_signal_review",
+        "organisation": recommendation["organisation"],
+        "categories": recommendation["categories"],
+        "confidence_score": recommendation["confidence_score"],
+        "recommendation_only": True,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "opportunity_recommendation_generated",
+        "recommendation": recommendation,
+        "gareth_approval_required": True,
+        "automatic_action_executed": False,
+    }
+
+
+@app.post("/glirn/opportunity-intelligence/{intelligence_id}/gareth-decision")
+def record_glirn_opportunity_intelligence_decision(
+    intelligence_id: str,
+    request: GlirnOpportunityDecisionRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    recommendation = next(
+        (
+            item for item in PERSISTED_OPPORTUNITY_INTELLIGENCE
+            if item.get("opportunity_intelligence_id") == intelligence_id
+        ),
+        None,
+    )
+    if recommendation is None:
+        raise HTTPException(status_code=404, detail="opportunity intelligence recommendation not found")
+    try:
+        decision = apply_gareth_opportunity_decision(
+            recommendation,
+            request.decision,
+            request.rationale,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record(
+        "opportunity_intelligence_decision_record",
+        decision["opportunity_decision_id"],
+        decision,
+    )
+    PERSISTED_OPPORTUNITY_DECISIONS[:] = list_records("opportunity_intelligence_decision_record")
+    persist_safe_action(
+        "glirn_opportunity_gareth_decision",
+        decision["opportunity_decision_id"],
+        opportunity_intelligence_id=decision["opportunity_intelligence_id"],
+        organisation=decision["organisation"],
+        decision=decision["decision"],
+        decision_by="Gareth",
+        decision_rationale_logged=False,
+        manual_review_only=True,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_opportunity_intelligence_gareth_decision",
+        "approval_id": decision["opportunity_decision_id"],
+        "decision": decision["decision"],
+        "provider": "gareth_final_approval",
+        "task_type": "opportunity_intelligence_decision",
+        "opportunity_intelligence_id": decision["opportunity_intelligence_id"],
+        "automatic_action_executed": False,
+        "autonomous_execution": False,
+    })
+    return {"status": "gareth_opportunity_decision_recorded", "decision": decision}
 
 
 @app.post("/glirn/intelligence-briefs/{brief_id}/final-approval")
