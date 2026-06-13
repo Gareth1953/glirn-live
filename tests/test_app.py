@@ -14,6 +14,7 @@ os.environ.setdefault(
 import app
 import glirn_human_review
 import glirn_confidence_engine
+import glirn_global_intelligence
 import glirn_multi_agent_review
 import glirn_responses
 import glirn_storage
@@ -7102,6 +7103,18 @@ class Mission109ApiTests(unittest.TestCase):
             "assessment_status": "cleared_for_gareth_approval",
         }
 
+    def cleared_global_intelligence(self):
+        return {
+            "global_intelligence_id": "global-intelligence-brief-109",
+            "brief_id": "brief-109",
+            "mission_110_confidence_assessment_id": "confidence-assessment-brief-109",
+            "content_fingerprint": glirn_multi_agent_review.brief_content_fingerprint(self.sections),
+            "validation_complete": True,
+            "escalation_required": False,
+            "unresolved_escalations": [],
+            "validation_status": "cleared_for_gareth_approval",
+        }
+
     def test_multi_agent_review_executes_all_roles_and_persists_audit_safe_record(self):
         stored = []
 
@@ -7160,6 +7173,7 @@ class Mission109ApiTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True), \
                 patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [self.cleared_review()]), \
                 patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.cleared_confidence_assessment()]), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", [self.cleared_global_intelligence()]), \
                 patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {}, clear=True), \
                 patch("app.set_state"), \
                 patch("app.persist_safe_action") as persist_action, \
@@ -7460,6 +7474,238 @@ class Mission110ApiTests(unittest.TestCase):
         self.assertIn("Reviewer agreement", rendered)
         self.assertIn("Outstanding limitations", rendered)
         self.assertIn("Gareth cannot override unresolved escalation", rendered)
+
+
+class Mission111ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.sections = {
+            name: f"Evidence-led approved content for {name}."
+            for name in glirn_multi_agent_review.CLIENT_CONTENT_SECTIONS
+        }
+        self.brief = {
+            "review_id": "brief-111",
+            "sections": {},
+            "candidate_personal_data_included": False,
+            "candidate_personal_data_blocked": False,
+        }
+        self.confidence_assessment = {
+            "confidence_assessment_id": "confidence-assessment-brief-111",
+            "brief_id": "brief-111",
+            "mission_109_review_id": "multi-agent-review-brief-111",
+            "content_fingerprint": glirn_multi_agent_review.brief_content_fingerprint(self.sections),
+            "assessment_complete": True,
+            "confidence_score": 88,
+            "confidence_category": "High Confidence",
+            "evidence_sufficiency_rating": 90,
+            "reviewer_agreement": {"level": "High", "significant_disagreement": False},
+            "evidence_transparency": {
+                "alternative_interpretations": ["Demand may reflect replacement activity."],
+            },
+            "escalation_required": False,
+            "unresolved_escalations": [],
+        }
+        self.glirn_data = {"intelligence_review_engine": {"generated_reviews": [self.brief]}}
+
+    def payload(self, **overrides):
+        payload = {
+            "brief_id": "brief-111",
+            "sections": self.sections,
+            "jurisdiction": "United Kingdom",
+            "practice_area": "Corporate & M&A",
+            "indicator_ratings": {
+                category: 80 for category in glirn_global_intelligence.INTELLIGENCE_CATEGORIES
+            },
+            "evidence_basis": ["Reviewed high-level market evidence summary."],
+            "known_limitations": ["Market information remains time-sensitive."],
+            "information_gaps": ["No material gap identified."],
+            "alternative_interpretations": ["Demand may reflect replacement activity."],
+        }
+        payload.update(overrides)
+        return payload
+
+    def cleared_validation(self):
+        return glirn_global_intelligence.generate_global_legal_intelligence(
+            self.brief,
+            self.confidence_assessment,
+            "United Kingdom",
+            "Corporate & M&A",
+            {category: 80 for category in glirn_global_intelligence.INTELLIGENCE_CATEGORIES},
+            ["Reviewed high-level market evidence summary."],
+        )
+
+    def test_global_intelligence_requires_mission_110_and_exact_content(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []):
+            missing = self.client.post(
+                "/glirn/intelligence-briefs/global-intelligence", json=self.payload(),
+            )
+        self.assertEqual(missing.status_code, 403)
+        self.assertIn("Mission 110", missing.json()["detail"])
+
+        changed = dict(self.sections)
+        changed["Market Observations"] = "Changed after Mission 110."
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.confidence_assessment]):
+            stale = self.client.post(
+                "/glirn/intelligence-briefs/global-intelligence",
+                json=self.payload(sections=changed),
+            )
+        self.assertEqual(stale.status_code, 409)
+        self.assertIn("content changed after Mission 110", stale.json()["detail"])
+
+    def test_global_intelligence_persists_audit_safe_structured_output(self):
+        stored = []
+
+        def store_record(category, record_id, payload):
+            stored.append((category, record_id, dict(payload)))
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.confidence_assessment]), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch("app.upsert_record", side_effect=store_record), \
+                patch("app.list_records", return_value=[]), \
+                patch("app.persist_safe_action") as persist_action, \
+                patch("app.record_approval_event") as approval_event:
+            response = self.client.post(
+                "/glirn/intelligence-briefs/global-intelligence", json=self.payload(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        record = data["global_intelligence"]
+        self.assertEqual(stored[0][0], "global_intelligence_record")
+        self.assertEqual(set(record["structured_observations"]), set(glirn_global_intelligence.INTELLIGENCE_CATEGORIES))
+        self.assertEqual(record["confidence_score"], self.confidence_assessment["confidence_score"])
+        self.assertEqual(record["confidence_category"], self.confidence_assessment["confidence_category"])
+        audit_payload = persist_action.call_args.kwargs
+        self.assertNotIn("evidence_transparency_summary", audit_payload)
+        self.assertNotIn("structured_observations", audit_payload)
+        self.assertFalse(audit_payload["confidential_source_material_logged"])
+        self.assertFalse(audit_payload["candidate_sensitive_information_logged"])
+        self.assertFalse(data["automatic_acceptance_enabled"])
+        self.assertFalse(data["automatic_payment_enabled"])
+        self.assertFalse(data["automatic_candidate_outreach_enabled"])
+        self.assertFalse(data["automatic_search_commitments_enabled"])
+        self.assertFalse(data["automatic_delivery_enabled"])
+        self.assertFalse(data["external_commitments_enabled"])
+        approval_event.assert_called_once()
+
+    def test_mission_111_cannot_be_bypassed_for_final_approval_or_delivery(self):
+        multi_review = {
+            "review_id": "multi-agent-review-brief-111",
+            "brief_id": "brief-111",
+            "review_complete": True,
+            "content_fingerprint": self.confidence_assessment["content_fingerprint"],
+            "escalation_required": False,
+            "unresolved_escalations": [],
+        }
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [multi_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.confidence_assessment]), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []):
+            approval = self.client.post(
+                "/glirn/intelligence-briefs/brief-111/final-approval",
+                json={"action_type": "approve", "reason": "Attempt without Mission 111."},
+            )
+        self.assertEqual(approval.status_code, 403)
+        self.assertIn("Mission 111 global intelligence validation is required", approval.json()["detail"])
+
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("app.list_pending_approvals", return_value=[]), \
+                patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", [{"brief_id": "brief-111"}]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [multi_review]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.confidence_assessment]), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []):
+            package = self.client.post(
+                "/glirn/intelligence-briefs/package",
+                json={"brief_id": "brief-111", "sections": self.sections},
+            )
+        self.assertEqual(package.status_code, 403)
+        self.assertIn("Mission 111 global intelligence validation is required", package.json()["detail"])
+
+    def test_unsupported_claims_and_required_escalations_block_delivery_even_if_preapproved(self):
+        cases = [
+            ({"unsupported_claims_identified": True}, "unsupported_intelligence_claims"),
+            ({"jurisdiction_expertise_limitations": True}, "jurisdiction_expertise_limitations"),
+            ({"evidence_insufficiency_identified": True}, "evidence_insufficiency"),
+            ({"exceeds_glirn_expertise_boundaries": True}, "glirn_expertise_boundary_exceeded"),
+        ]
+        for options, expected in cases:
+            with self.subTest(expected=expected):
+                validation = glirn_global_intelligence.generate_global_legal_intelligence(
+                    self.brief,
+                    self.confidence_assessment,
+                    "United States",
+                    "Antitrust",
+                    {category: 80 for category in glirn_global_intelligence.INTELLIGENCE_CATEGORIES},
+                    ["Reviewed evidence summary."],
+                    **options,
+                )
+                self.assertIn(expected, validation["unresolved_escalations"])
+                with patch.dict("os.environ", {}, clear=True), \
+                        patch("app.list_pending_approvals", return_value=[]), \
+                        patch("app.get_glirn_dashboard_data", return_value=self.glirn_data), \
+                        patch.object(app, "PERSISTED_HUMAN_REVIEWS", [{"brief_id": "brief-111"}]), \
+                        patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", [{
+                            "review_id": "multi-agent-review-brief-111", "brief_id": "brief-111",
+                            "review_complete": True, "content_fingerprint": self.confidence_assessment["content_fingerprint"],
+                            "escalation_required": False, "unresolved_escalations": [],
+                        }]), \
+                        patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.confidence_assessment]), \
+                        patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", [validation]), \
+                        patch.dict(app.FINAL_APPROVAL_LOCAL_STATUS, {
+                            "intelligence-brief-final-approval-brief-111": "approved_by_gareth",
+                        }, clear=True):
+                    package = self.client.post(
+                        "/glirn/intelligence-briefs/package",
+                        json={"brief_id": "brief-111", "sections": self.sections},
+                    )
+                self.assertEqual(package.status_code, 403)
+                self.assertIn("unresolved Mission 111 escalations", package.json()["detail"])
+
+    def test_low_confidence_and_reviewer_disagreement_block_mission_111(self):
+        cases = [
+            ({"confidence_score": 69, "confidence_category": "Moderate Confidence"}, "confidence_below_70"),
+            ({"reviewer_agreement": {"level": "Low", "significant_disagreement": True}}, "reviewer_disagreement_unresolved"),
+        ]
+        for update, expected in cases:
+            with self.subTest(expected=expected):
+                assessment = dict(self.confidence_assessment)
+                assessment.update(update)
+                validation = glirn_global_intelligence.generate_global_legal_intelligence(
+                    self.brief, assessment, "Singapore", "Employment Law",
+                    {category: 80 for category in glirn_global_intelligence.INTELLIGENCE_CATEGORIES},
+                    ["Reviewed evidence summary."],
+                )
+                self.assertIn(expected, validation["unresolved_escalations"])
+                self.assertTrue(validation["escalation_required"])
+                self.assertFalse(validation["delivery_eligible"])
+
+    def test_command_centre_displays_jurisdiction_intelligence_status(self):
+        validation = self.cleared_validation()
+        with patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", [validation]), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", [self.confidence_assessment]), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            dashboard_data = app.glirn_dashboard()
+            rendered = app.render_gareth_command_centre(dashboard_data)
+
+        summary = dashboard_data["gareth_command_centre"]["global_intelligence_summary"]
+        self.assertEqual(summary["latest_jurisdiction"], "United Kingdom")
+        self.assertEqual(summary["latest_practice_area"], "Corporate & M&A")
+        self.assertIn("Global Legal Intelligence", rendered)
+        self.assertIn("Evidence sufficiency", rendered)
+        self.assertIn("Intelligence limitations", rendered)
+        self.assertIn("Mission 111 escalation blocks", rendered)
 
 
 if __name__ == "__main__":

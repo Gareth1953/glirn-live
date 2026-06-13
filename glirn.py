@@ -6596,6 +6596,42 @@ def build_confidence_assessment_summary(assessment_records):
     }
 
 
+def build_global_intelligence_summary(validation_records):
+    records = list(validation_records or [])
+    escalated = [item for item in records if item.get("escalation_required")]
+    cleared = [
+        item for item in records
+        if item.get("validation_complete") and not item.get("escalation_required")
+    ]
+    latest = records[-1] if records else {}
+    return {
+        "validation_count": len(records),
+        "completed_validation_count": sum(1 for item in records if item.get("validation_complete")),
+        "cleared_validation_count": len(cleared),
+        "escalated_validation_count": len(escalated),
+        "escalated_validations": escalated,
+        "latest_jurisdiction": latest.get("jurisdiction", "not_assessed"),
+        "latest_practice_area": latest.get("practice_area", "not_assessed"),
+        "latest_confidence_category": latest.get("confidence_category", "not_assessed"),
+        "latest_evidence_sufficiency_rating": latest.get("evidence_sufficiency_rating"),
+        "latest_limitations": latest.get("known_limitations", []),
+        "latest_escalation_status": latest.get("validation_status", "not_started"),
+        "delivery_blocked": not records or bool(escalated),
+        "mission_106_approval_required": True,
+        "mission_109_review_required": True,
+        "mission_110_assessment_required": True,
+        "mission_111_validation_required": True,
+        "gareth_final_approval_required": True,
+        "gareth_override_allowed": False,
+        "automatic_acceptance_enabled": False,
+        "automatic_payment_enabled": False,
+        "automatic_candidate_outreach_enabled": False,
+        "automatic_search_commitments_enabled": False,
+        "automatic_delivery_enabled": False,
+        "external_commitments_enabled": False,
+    }
+
+
 def get_legal_practice_areas():
     return [
         LegalPracticeArea(code=sector_code(sector), name=sector).to_dict()

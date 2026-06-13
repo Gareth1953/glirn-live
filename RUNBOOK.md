@@ -525,6 +525,20 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Global legal intelligence engine
+
+Mission 111 adds jurisdiction-aware, high-level hiring intelligence for the United Kingdom, United Arab Emirates, Singapore, European Union, and United States. Submit a validation through `POST /glirn/intelligence-briefs/global-intelligence` after Mission 110 using the exact brief content assessed by Mission 110.
+
+Each validation covers hiring difficulty, practice-area demand, market competitiveness, jurisdiction-specific considerations, candidate scarcity, and talent mobility. Every record includes jurisdiction, practice area, intelligence summary, evidence transparency summary, the authoritative Mission 110 confidence score and category, limitations, information gaps, alternative interpretations, and review timestamp.
+
+Observations are cautious interpretations of supplied indicator ratings and evidence summaries. They are not asserted market facts, legal advice, candidate-specific intelligence, or search commitments. Candidate-specific intelligence remains prohibited without valid consent, and detailed evidence or confidential source material is not copied into audit-safe action records.
+
+Mission 111 automatically escalates confidence below 70, jurisdiction expertise limitations, insufficient evidence, unresolved reviewer disagreement, intelligence outside GLIRN's expertise boundaries, unsupported claims, unresolved Mission 110 escalation, and incomplete candidate consent. Escalated intelligence cannot receive final Gareth approval or proceed to delivery packaging, and Gareth cannot override an unresolved escalation directly.
+
+Delivery eligibility requires Mission 106 approval, completed Mission 109 review, completed Mission 110 confidence assessment, completed Mission 111 validation of the same content, no unresolved escalation, and Gareth's final approval. The generated package remains local and manual-only. Acceptance, payment, candidate outreach, search commitments, brief delivery, and external commitments remain disabled.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Confidence scoring and evidence transparency
 
 Mission 110 adds a separate confidence assessment after Mission 109. Submit it through `POST /glirn/intelligence-briefs/confidence-assessment` using the exact content reviewed in Mission 109. The weighted score covers evidence sufficiency, evidence quality, reviewer agreement, escalation presence, Mission 106 outcome, candidate consent completeness, data recency, and market information completeness.

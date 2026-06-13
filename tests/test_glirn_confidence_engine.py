@@ -4,6 +4,7 @@ from glirn_confidence_engine import (
     CONFIDENCE_WEIGHTS,
     assess_confidence,
     confidence_category,
+    confidence_context_for_global_intelligence,
     render_evidence_transparency_markdown,
     reviewer_agreement,
 )
@@ -175,6 +176,25 @@ class ConfidenceEngineTests(unittest.TestCase):
         self.assertFalse(assessment["automatic_search_activity_enabled"])
         self.assertFalse(assessment["automatic_delivery_enabled"])
         self.assertFalse(assessment["external_commitments_enabled"])
+
+    def test_global_intelligence_context_inherits_authoritative_confidence(self):
+        assessment = assess_confidence(
+            brief(), approved_human_review(), multi_agent_review(), 85, 80, 75, 70,
+        )
+        context = confidence_context_for_global_intelligence(assessment, "brief-110")
+
+        self.assertEqual(context["confidence_assessment_id"], assessment["confidence_assessment_id"])
+        self.assertEqual(context["confidence_score"], assessment["confidence_score"])
+        self.assertEqual(context["confidence_category"], assessment["confidence_category"])
+        self.assertEqual(context["evidence_sufficiency_rating"], 85.0)
+        self.assertFalse(context["reviewer_disagreement_unresolved"])
+
+    def test_global_intelligence_context_rejects_mismatched_brief(self):
+        with self.assertRaisesRegex(ValueError, "matching Mission 110"):
+            confidence_context_for_global_intelligence(confidence_assessment := {
+                "brief_id": "other-brief",
+                "assessment_complete": True,
+            }, "brief-110")
 
 
 if __name__ == "__main__":

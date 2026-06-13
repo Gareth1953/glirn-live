@@ -274,3 +274,29 @@ def assess_confidence(
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
     }
+
+
+def confidence_context_for_global_intelligence(assessment, brief_id):
+    if not assessment or assessment.get("brief_id") != brief_id:
+        raise ValueError("matching Mission 110 confidence assessment is required")
+    if not assessment.get("assessment_complete"):
+        raise ValueError("Mission 110 confidence assessment must be complete")
+    transparency = assessment.get("evidence_transparency") or {}
+    agreement = assessment.get("reviewer_agreement") or {}
+    return {
+        "confidence_assessment_id": assessment.get("confidence_assessment_id"),
+        "content_fingerprint": assessment.get("content_fingerprint"),
+        "confidence_score": float(assessment.get("confidence_score", 0)),
+        "confidence_category": assessment.get("confidence_category", confidence_category(0)),
+        "evidence_sufficiency_rating": float(assessment.get("evidence_sufficiency_rating", 0)),
+        "reviewer_disagreement_unresolved": bool(
+            agreement.get("significant_disagreement") or agreement.get("level") == "Low"
+        ),
+        "mission_110_escalation_unresolved": bool(
+            assessment.get("escalation_required") or assessment.get("unresolved_escalations")
+        ),
+        "alternative_interpretations": _safe_list(
+            transparency.get("alternative_interpretations"),
+            ["Alternative market explanations remain possible within the available evidence."],
+        ),
+    }

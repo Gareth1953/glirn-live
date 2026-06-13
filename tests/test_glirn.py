@@ -60,6 +60,7 @@ from glirn import (
     build_email_draft_export_engine,
     build_enquiry_notification_summary,
     build_confidence_assessment_summary,
+    build_global_intelligence_summary,
     build_multi_agent_review_summary,
     build_email_draft_export_object,
     apply_email_draft_export_action,
@@ -3172,6 +3173,38 @@ class GlirnFoundationTests(unittest.TestCase):
         self.assertFalse(summary["automatic_payment_enabled"])
         self.assertFalse(summary["automatic_candidate_outreach_enabled"])
         self.assertFalse(summary["automatic_search_activity_enabled"])
+        self.assertFalse(summary["automatic_delivery_enabled"])
+        self.assertFalse(summary["external_commitments_enabled"])
+
+    def test_global_intelligence_summary_exposes_jurisdiction_and_safeguards(self):
+        summary = build_global_intelligence_summary([{
+            "global_intelligence_id": "global-intelligence-1",
+            "validation_complete": True,
+            "jurisdiction": "United States",
+            "practice_area": "Antitrust",
+            "confidence_category": "High Confidence",
+            "evidence_sufficiency_rating": 87,
+            "known_limitations": ["State-level variation requires specialist validation."],
+            "validation_status": "cleared_for_gareth_approval",
+            "escalation_required": False,
+        }])
+
+        self.assertEqual(summary["validation_count"], 1)
+        self.assertEqual(summary["latest_jurisdiction"], "United States")
+        self.assertEqual(summary["latest_practice_area"], "Antitrust")
+        self.assertEqual(summary["latest_confidence_category"], "High Confidence")
+        self.assertEqual(summary["latest_evidence_sufficiency_rating"], 87)
+        self.assertFalse(summary["delivery_blocked"])
+        self.assertTrue(summary["mission_106_approval_required"])
+        self.assertTrue(summary["mission_109_review_required"])
+        self.assertTrue(summary["mission_110_assessment_required"])
+        self.assertTrue(summary["mission_111_validation_required"])
+        self.assertTrue(summary["gareth_final_approval_required"])
+        self.assertFalse(summary["gareth_override_allowed"])
+        self.assertFalse(summary["automatic_acceptance_enabled"])
+        self.assertFalse(summary["automatic_payment_enabled"])
+        self.assertFalse(summary["automatic_candidate_outreach_enabled"])
+        self.assertFalse(summary["automatic_search_commitments_enabled"])
         self.assertFalse(summary["automatic_delivery_enabled"])
         self.assertFalse(summary["external_commitments_enabled"])
 
