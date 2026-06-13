@@ -56,6 +56,16 @@ from glirn_multi_agent_review import brief_content_fingerprint, run_multi_agent_
 from glirn_confidence_engine import assess_confidence, render_evidence_transparency_markdown
 from glirn_global_intelligence import generate_global_legal_intelligence, render_global_intelligence_markdown
 from glirn_decline_decision import apply_gareth_decision, evaluate_decline_decision
+from glirn_internal_learning import (
+    approve_learning_insight,
+    capture_learning_outcome,
+    generate_improvement_insights,
+)
+from glirn_external_learning import (
+    approve_knowledge_update,
+    generate_external_intelligence,
+    ingest_public_evidence,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -100,6 +110,12 @@ PERSISTED_CONFIDENCE_ASSESSMENTS = []
 PERSISTED_GLOBAL_INTELLIGENCE = []
 PERSISTED_DECLINE_RECOMMENDATIONS = []
 PERSISTED_DECLINE_DECISIONS = []
+PERSISTED_LEARNING_OUTCOMES = []
+PERSISTED_LEARNING_INSIGHTS = []
+PERSISTED_LEARNING_APPROVALS = []
+PERSISTED_EXTERNAL_EVIDENCE = []
+PERSISTED_EXTERNAL_INTELLIGENCE = []
+PERSISTED_KNOWLEDGE_UPDATES = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -125,6 +141,12 @@ def reload_persistent_state():
     PERSISTED_GLOBAL_INTELLIGENCE[:] = list_records("global_intelligence_record")
     PERSISTED_DECLINE_RECOMMENDATIONS[:] = list_records("decline_recommendation_record")
     PERSISTED_DECLINE_DECISIONS[:] = list_records("decline_decision_record")
+    PERSISTED_LEARNING_OUTCOMES[:] = list_records("learning_outcome_record")
+    PERSISTED_LEARNING_INSIGHTS[:] = list_records("learning_insight_record")
+    PERSISTED_LEARNING_APPROVALS[:] = list_records("learning_approval_record")
+    PERSISTED_EXTERNAL_EVIDENCE[:] = list_records("external_evidence_record")
+    PERSISTED_EXTERNAL_INTELLIGENCE[:] = list_records("external_intelligence_learning_record")
+    PERSISTED_KNOWLEDGE_UPDATES[:] = list_records("knowledge_base_record")
 
 
 reload_persistent_state()
@@ -313,6 +335,40 @@ class GlirnDeclineRecommendationRequest(BaseModel):
 
 class GlirnDeclineFinalDecisionRequest(BaseModel):
     final_decision: str
+    rationale: str
+
+
+class GlirnLearningOutcomeRequest(BaseModel):
+    record_id: str
+    brief_id: str
+    gareth_decision: str
+    brief_outcome: str
+    remediation_outcome: str
+    outcome_summary: str
+    decline_reason_codes: list[str] = Field(default_factory=list)
+
+
+class GlirnLearningInsightApprovalRequest(BaseModel):
+    rationale: str
+
+
+class GlirnExternalEvidenceRequest(BaseModel):
+    evidence_id: str
+    source_type: str
+    title: str
+    publisher: str
+    source_url: str
+    publication_date: str
+    evidence_summary: str
+    jurisdiction: str | None = None
+
+
+class GlirnExternalIntelligenceRequest(BaseModel):
+    topic: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class GlirnKnowledgeUpdateApprovalRequest(BaseModel):
     rationale: str
 
 
@@ -3731,6 +3787,28 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["decline_recommendations"] = decline_recommendations
     glirn_data["decline_decisions"] = decline_decisions
     glirn_data["decline_decision_summary"] = decline_decision_summary
+    learning_summary = {
+        "outcome_count": len(PERSISTED_LEARNING_OUTCOMES),
+        "insight_count": len(PERSISTED_LEARNING_INSIGHTS),
+        "approved_insight_count": len(PERSISTED_LEARNING_APPROVALS),
+        "awaiting_gareth_approval_count": max(
+            0, len(PERSISTED_LEARNING_INSIGHTS) - len(PERSISTED_LEARNING_APPROVALS)
+        ),
+        "recommendation_only": True,
+        "gareth_approval_mandatory": True,
+    }
+    external_learning_summary = {
+        "evidence_count": len(PERSISTED_EXTERNAL_EVIDENCE),
+        "intelligence_count": len(PERSISTED_EXTERNAL_INTELLIGENCE),
+        "approved_knowledge_update_count": len(PERSISTED_KNOWLEDGE_UPDATES),
+        "awaiting_gareth_approval_count": max(
+            0, len(PERSISTED_EXTERNAL_INTELLIGENCE) - len(PERSISTED_KNOWLEDGE_UPDATES)
+        ),
+        "legal_advice_provided": False,
+        "automatic_regulatory_updates_enabled": False,
+    }
+    glirn_data["internal_learning_summary"] = learning_summary
+    glirn_data["external_learning_summary"] = external_learning_summary
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3764,6 +3842,10 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["decline_decision_summary"] = decline_decision_summary
     glirn_data["gareth_command_centre"]["decline_recommendations"] = decline_recommendations
     glirn_data["gareth_command_centre"]["decline_decisions"] = decline_decisions
+    glirn_data["gareth_command_centre"]["internal_learning_summary"] = learning_summary
+    glirn_data["gareth_command_centre"]["learning_insights"] = list(PERSISTED_LEARNING_INSIGHTS)
+    glirn_data["gareth_command_centre"]["external_learning_summary"] = external_learning_summary
+    glirn_data["gareth_command_centre"]["external_intelligence_learning"] = list(PERSISTED_EXTERNAL_INTELLIGENCE)
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -5011,6 +5093,220 @@ def record_glirn_decline_final_decision(
         "automatic_delivery_enabled": False,
         "external_commitments_enabled": False,
     }
+
+
+@app.post("/glirn/learning/outcomes")
+def record_glirn_learning_outcome(
+    request: GlirnLearningOutcomeRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        record = capture_learning_outcome(
+            request.record_id,
+            request.brief_id,
+            request.gareth_decision,
+            request.brief_outcome,
+            request.remediation_outcome,
+            request.outcome_summary,
+            request.decline_reason_codes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("learning_outcome_record", record["learning_outcome_id"], record)
+    PERSISTED_LEARNING_OUTCOMES[:] = list_records("learning_outcome_record")
+    persist_safe_action(
+        "glirn_learning_outcome_captured",
+        record["learning_outcome_id"],
+        brief_id=record["brief_id"],
+        gareth_decision=record["gareth_decision"],
+        brief_outcome=record["brief_outcome"],
+        remediation_outcome=record["remediation_outcome"],
+        decline_reason_codes=record["decline_reason_codes"],
+        sensitive_outcome_summary_logged=False,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_internal_learning_outcome",
+        "approval_id": record["learning_outcome_id"],
+        "decision": record["gareth_decision"],
+        "provider": "gareth_recorded_outcome",
+        "task_type": "internal_learning_outcome_capture",
+        "brief_id": record["brief_id"],
+        "brief_outcome": record["brief_outcome"],
+        "remediation_outcome": record["remediation_outcome"],
+        "sensitive_information_logged": False,
+        "autonomous_execution": False,
+    })
+    return {"status": "learning_outcome_recorded", "learning_outcome": record}
+
+
+@app.post("/glirn/learning/insights")
+def generate_glirn_learning_insights(x_api_key: str | None = Header(default=None)):
+    require_api_key(x_api_key)
+    insight = generate_improvement_insights(PERSISTED_LEARNING_OUTCOMES)
+    upsert_record("learning_insight_record", insight["insight_id"], insight)
+    PERSISTED_LEARNING_INSIGHTS[:] = list_records("learning_insight_record")
+    persist_safe_action(
+        "glirn_learning_insight_generated",
+        insight["insight_id"],
+        outcome_count=insight["outcome_count"],
+        recommendation_count=len(insight["recommendation_improvement_insights"]),
+        recommendation_only=True,
+        gareth_approval_mandatory=True,
+        sensitive_details_logged=False,
+        automatic_action_executed=False,
+    )
+    return {"status": "learning_insight_generated", "insight": insight}
+
+
+@app.post("/glirn/learning/insights/{insight_id}/gareth-approval")
+def approve_glirn_learning_insight(
+    insight_id: str,
+    request: GlirnLearningInsightApprovalRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    insight = next((item for item in PERSISTED_LEARNING_INSIGHTS if item.get("insight_id") == insight_id), None)
+    if insight is None:
+        raise HTTPException(status_code=404, detail="learning insight not found")
+    try:
+        approval = approve_learning_insight(insight, request.rationale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("learning_approval_record", approval["learning_approval_id"], approval)
+    PERSISTED_LEARNING_APPROVALS[:] = list_records("learning_approval_record")
+    persist_safe_action(
+        "glirn_learning_insight_gareth_approval",
+        approval["learning_approval_id"],
+        insight_id=approval["insight_id"],
+        approved_by="Gareth",
+        approved_for_manual_consideration=True,
+        knowledge_or_policy_updated=False,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_learning_insight_approval",
+        "approval_id": approval["learning_approval_id"],
+        "decision": "approved_for_manual_consideration",
+        "provider": "gareth_final_approval",
+        "task_type": "internal_learning_insight_approval",
+        "insight_id": approval["insight_id"],
+        "automatic_action_executed": False,
+        "autonomous_execution": False,
+    })
+    return {"status": "learning_insight_approved_for_manual_consideration", "approval": approval}
+
+
+@app.post("/glirn/external-learning/evidence")
+def record_glirn_external_evidence(
+    request: GlirnExternalEvidenceRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        evidence = ingest_public_evidence(
+            request.evidence_id,
+            request.source_type,
+            request.title,
+            request.publisher,
+            request.source_url,
+            request.publication_date,
+            request.evidence_summary,
+            request.jurisdiction,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("external_evidence_record", evidence["evidence_id"], evidence)
+    PERSISTED_EXTERNAL_EVIDENCE[:] = list_records("external_evidence_record")
+    persist_safe_action(
+        "glirn_external_evidence_ingested",
+        evidence["evidence_id"],
+        source_type=evidence["source_type"],
+        publisher=evidence["publisher"],
+        confidence_category=evidence["confidence_category"],
+        evidence_weight=evidence["evidence_weight"],
+        source_content_logged=False,
+        external_retrieval_executed=False,
+    )
+    return {"status": "external_evidence_recorded", "evidence": evidence}
+
+
+@app.post("/glirn/external-learning/intelligence")
+def generate_glirn_external_learning_intelligence(
+    request: GlirnExternalIntelligenceRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    requested_ids = set(request.evidence_ids)
+    records = [item for item in PERSISTED_EXTERNAL_EVIDENCE if item.get("evidence_id") in requested_ids]
+    if len(records) != len(requested_ids) or not records:
+        raise HTTPException(status_code=404, detail="one or more external evidence records were not found")
+    try:
+        intelligence = generate_external_intelligence(records, request.topic)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record(
+        "external_intelligence_learning_record",
+        intelligence["external_intelligence_id"],
+        intelligence,
+    )
+    PERSISTED_EXTERNAL_INTELLIGENCE[:] = list_records("external_intelligence_learning_record")
+    persist_safe_action(
+        "glirn_external_intelligence_generated",
+        intelligence["external_intelligence_id"],
+        evidence_ids=intelligence["evidence_ids"],
+        source_count=intelligence["source_count"],
+        confidence_category=intelligence["confidence_category"],
+        weighted_confidence_score=intelligence["weighted_confidence_score"],
+        recommendation_only=True,
+        legal_advice_provided=False,
+        automatic_action_executed=False,
+    )
+    return {"status": "external_intelligence_generated", "intelligence": intelligence}
+
+
+@app.post("/glirn/external-learning/intelligence/{intelligence_id}/gareth-approval")
+def approve_glirn_knowledge_update(
+    intelligence_id: str,
+    request: GlirnKnowledgeUpdateApprovalRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    intelligence = next(
+        (item for item in PERSISTED_EXTERNAL_INTELLIGENCE if item.get("external_intelligence_id") == intelligence_id),
+        None,
+    )
+    if intelligence is None:
+        raise HTTPException(status_code=404, detail="external intelligence record not found")
+    try:
+        update = approve_knowledge_update(intelligence, request.rationale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("knowledge_base_record", update["knowledge_update_id"], update)
+    PERSISTED_KNOWLEDGE_UPDATES[:] = list_records("knowledge_base_record")
+    persist_safe_action(
+        "glirn_knowledge_update_gareth_approval",
+        update["knowledge_update_id"],
+        external_intelligence_id=update["external_intelligence_id"],
+        evidence_ids=update["evidence_ids"],
+        approved_by="Gareth",
+        knowledge_base_status=update["knowledge_base_status"],
+        approval_rationale_logged=False,
+        automatic_regulatory_change_implemented=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_external_knowledge_update_approval",
+        "approval_id": update["knowledge_update_id"],
+        "decision": "approved_for_manual_use",
+        "provider": "gareth_final_approval",
+        "task_type": "external_knowledge_update",
+        "external_intelligence_id": update["external_intelligence_id"],
+        "automatic_regulatory_change_implemented": False,
+        "external_contact_executed": False,
+        "autonomous_execution": False,
+    })
+    return {"status": "knowledge_update_approved_for_manual_use", "knowledge_update": update}
 
 
 @app.post("/glirn/intelligence-briefs/{brief_id}/final-approval")

@@ -1,5 +1,13 @@
 # GLIRN Next Roadmap
 
+## Current Mission Status - June 13, 2026
+
+- Mission 113: Internal Learning System - completed, verified, and approved by Gareth.
+- Mission 113A: External Legal Intelligence & Compliance Learning - completed, verified, and approved by Gareth.
+- Mission 114: planning only; implementation is not approved and must not begin without explicit Gareth approval.
+
+Mission 113 and Mission 113A remain recommendation-only systems. Gareth approval is mandatory for learning insight consideration and knowledge-base updates. No autonomous decision, outreach, referral, payment, delivery, regulatory change, or external commitment is enabled.
+
 ## Priority Order
 
 The next roadmap should harden GLIRN before adding live external integrations. Priority should remain compliance, human approval, data quality, revenue validation, and pilot readiness.

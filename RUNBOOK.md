@@ -525,6 +525,30 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Internal learning system
+
+Mission 113 records Gareth's decisions and completed-brief outcomes through `POST /glirn/learning/outcomes`. Records capture the brief outcome, decline reason codes, and remediation result using minimised, redacted summaries. They do not train or modify an autonomous decision system.
+
+Generate advisory improvement insights through `POST /glirn/learning/insights`. Insights aggregate recurring decline factors, remediation outcomes, and completed-brief results. They remain recommendations only and cannot update policy, acceptance criteria, delivery controls, or the GLIRN knowledge base.
+
+Gareth may approve an insight for manual consideration through `POST /glirn/learning/insights/{insight_id}/gareth-approval`. Approval records consideration only; implementation remains a separate manual change. Audit history stores identifiers, coded outcomes, counts, and approval status without copying sensitive narratives.
+
+Autonomous decision-making, outreach, referrals, payments, delivery, and external commitments remain disabled. All Missions 105-112 safeguards continue to apply.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
+## External legal intelligence and compliance learning
+
+Mission 113A accepts explicitly submitted public evidence through `POST /glirn/external-learning/evidence`; it does not crawl, retrieve, or contact external sources. Supported source classes and weights are government or regulatory sources (Very High, 95), professional bodies (High, 85), major recruitment reports (Medium, 65), and industry forums or discussions (Low, 35).
+
+Generate a cited recommendation-only summary through `POST /glirn/external-learning/intelligence`. The output contains source identifiers, weighted confidence, intelligence summaries, and review recommendations. It is not legal advice and does not automatically implement regulatory or operational changes.
+
+A knowledge update can be recorded only through `POST /glirn/external-learning/intelligence/{intelligence_id}/gareth-approval`. Gareth must review the public sources and provide a rationale. The approved record is for manual use; it does not contact any organisation, create an external commitment, or alter regulations, workflows, or client decisions automatically.
+
+Audit events retain source identifiers, source class, publisher, confidence, counts, and approval status without copying source content unnecessarily. All Missions 105-112 safeguards remain mandatory.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Should We Decline decision engine
 
 Mission 112 provides an advisory pre-engagement decision framework across Client Fit, Ethical Risk, Commercial Viability, Reputation Risk, and Delivery Confidence. Generate a recommendation through `POST /glirn/decline-decisions/recommendations` with a 0-100 score and concise evidence summary for each factor.

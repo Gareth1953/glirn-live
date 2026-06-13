@@ -7893,5 +7893,148 @@ class Mission112ApiTests(unittest.TestCase):
         self.assertIn("Recommendation only", rendered)
 
 
+class Mission113ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.outcomes = []
+        self.insights = []
+        self.approvals = []
+
+    def _records(self, category):
+        return {
+            "learning_outcome_record": self.outcomes,
+            "learning_insight_record": self.insights,
+            "learning_approval_record": self.approvals,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        records = self._records(category)
+        records[:] = [item for item in records if not any(
+            item.get(key) == record_id for key in (
+                "learning_outcome_id", "insight_id", "learning_approval_id"
+            )
+        )]
+        records.append(dict(payload))
+
+    def test_internal_learning_flow_requires_gareth_and_remains_advisory(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_LEARNING_OUTCOMES", self.outcomes), \
+                patch.object(app, "PERSISTED_LEARNING_INSIGHTS", self.insights), \
+                patch.object(app, "PERSISTED_LEARNING_APPROVALS", self.approvals), \
+                patch("app.upsert_record", side_effect=self._upsert), \
+                patch("app.list_records", side_effect=self._records), \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event"):
+            outcome_response = self.client.post("/glirn/learning/outcomes", json={
+                "record_id": "decision-113",
+                "brief_id": "brief-113",
+                "gareth_decision": "DECLINE",
+                "brief_outcome": "not_completed",
+                "remediation_outcome": "declined_after_remediation",
+                "outcome_summary": "The risk remained unresolved.",
+                "decline_reason_codes": ["ethical_risk"],
+            })
+            insight_response = self.client.post("/glirn/learning/insights")
+            insight = insight_response.json()["insight"]
+            approval_response = self.client.post(
+                f"/glirn/learning/insights/{insight['insight_id']}/gareth-approval",
+                json={"rationale": "Approved for manual consideration only."},
+            )
+
+        self.assertEqual(outcome_response.status_code, 200)
+        self.assertEqual(insight_response.status_code, 200)
+        self.assertEqual(insight["status"], "awaiting_gareth_approval")
+        self.assertTrue(insight["recommendation_only"])
+        self.assertFalse(insight["knowledge_or_policy_updated"])
+        self.assertEqual(approval_response.status_code, 200)
+        approval = approval_response.json()["approval"]
+        self.assertEqual(approval["approved_by"], "Gareth")
+        self.assertFalse(approval["automatic_action_executed"])
+        self.assertNotIn("outcome_summary", audit.call_args_list[0].kwargs)
+
+    def test_unknown_learning_insight_cannot_be_approved(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_LEARNING_INSIGHTS", []):
+            response = self.client.post(
+                "/glirn/learning/insights/missing/gareth-approval",
+                json={"rationale": "No record exists."},
+            )
+        self.assertEqual(response.status_code, 404)
+
+
+class Mission113AApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.evidence = []
+        self.intelligence = []
+        self.updates = []
+
+    def _records(self, category):
+        return {
+            "external_evidence_record": self.evidence,
+            "external_intelligence_learning_record": self.intelligence,
+            "knowledge_base_record": self.updates,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        records = self._records(category)
+        records.append(dict(payload))
+
+    def test_external_learning_flow_weights_evidence_and_requires_gareth(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_EXTERNAL_EVIDENCE", self.evidence), \
+                patch.object(app, "PERSISTED_EXTERNAL_INTELLIGENCE", self.intelligence), \
+                patch.object(app, "PERSISTED_KNOWLEDGE_UPDATES", self.updates), \
+                patch("app.upsert_record", side_effect=self._upsert), \
+                patch("app.list_records", side_effect=self._records), \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event"):
+            evidence_response = self.client.post("/glirn/external-learning/evidence", json={
+                "evidence_id": "regulation-113a",
+                "source_type": "government_regulatory",
+                "title": "Public recruitment regulation",
+                "publisher": "Regulator",
+                "source_url": "https://example.org/regulation",
+                "publication_date": "2026-06-01",
+                "evidence_summary": "Public compliance requirements relevant to recruitment.",
+                "jurisdiction": "United Kingdom",
+            })
+            intelligence_response = self.client.post("/glirn/external-learning/intelligence", json={
+                "topic": "Recruitment compliance",
+                "evidence_ids": ["regulation-113a"],
+            })
+            intelligence = intelligence_response.json()["intelligence"]
+            approval_response = self.client.post(
+                f"/glirn/external-learning/intelligence/{intelligence['external_intelligence_id']}/gareth-approval",
+                json={"rationale": "Source reviewed and approved for manual use."},
+            )
+
+        self.assertEqual(evidence_response.status_code, 200)
+        self.assertEqual(evidence_response.json()["evidence"]["confidence_category"], "Very High")
+        self.assertEqual(intelligence_response.status_code, 200)
+        self.assertTrue(intelligence["recommendation_only"])
+        self.assertFalse(intelligence["legal_advice_provided"])
+        self.assertEqual(intelligence["knowledge_base_status"], "awaiting_gareth_approval")
+        self.assertEqual(approval_response.status_code, 200)
+        update = approval_response.json()["knowledge_update"]
+        self.assertEqual(update["approved_by"], "Gareth")
+        self.assertFalse(update["automatic_regulatory_change_implemented"])
+        self.assertNotIn("evidence_summary", audit.call_args_list[0].kwargs)
+
+    def test_missing_evidence_blocks_intelligence_and_unknown_update_blocks_approval(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_EXTERNAL_EVIDENCE", []), \
+                patch.object(app, "PERSISTED_EXTERNAL_INTELLIGENCE", []):
+            intelligence_response = self.client.post("/glirn/external-learning/intelligence", json={
+                "topic": "Missing evidence", "evidence_ids": ["missing"]
+            })
+            approval_response = self.client.post(
+                "/glirn/external-learning/intelligence/missing/gareth-approval",
+                json={"rationale": "Cannot approve."},
+            )
+        self.assertEqual(intelligence_response.status_code, 404)
+        self.assertEqual(approval_response.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()
