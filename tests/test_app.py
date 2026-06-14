@@ -8142,5 +8142,100 @@ class Mission114ApiTests(unittest.TestCase):
         self.assertFalse(summary["autonomous_prospecting_enabled"])
 
 
+class Mission115ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.snapshots = []
+        self.decisions = []
+
+    def _records(self, category):
+        return {
+            "self_learning_snapshot_record": self.snapshots,
+            "self_learning_decision_record": self.decisions,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        self._records(category).append(dict(payload))
+
+    def test_snapshot_and_gareth_decision_flow_remains_advisory(self):
+        decline_decisions = [{
+            "decision_id": "decision-115",
+            "system_recommendation": "ACCEPT",
+            "final_decision": "MORE_INFORMATION_REQUIRED",
+            "decision_by": "Gareth",
+            "gareth_approved": True,
+        }]
+        learning_outcomes = [{
+            "learning_outcome_id": "outcome-115",
+            "decision_by": "Gareth",
+            "decline_reason_codes": ["evidence_insufficient"],
+            "remediation_outcome": "resolved",
+        }]
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_DECLINE_DECISIONS", decline_decisions), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_LEARNING_OUTCOMES", learning_outcomes), \
+                patch.object(app, "PERSISTED_EXTERNAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_KNOWLEDGE_UPDATES", []), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_OPPORTUNITY_DECISIONS", []), \
+                patch.object(app, "PERSISTED_SELF_LEARNING_SNAPSHOTS", self.snapshots), \
+                patch.object(app, "PERSISTED_SELF_LEARNING_DECISIONS", self.decisions), \
+                patch("app.upsert_record", side_effect=self._upsert), \
+                patch("app.list_records", side_effect=self._records), \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event") as approval_audit:
+            snapshot_response = self.client.post("/glirn/self-learning/snapshots")
+            snapshot = snapshot_response.json()["snapshot"]
+            decision_response = self.client.post(
+                f"/glirn/self-learning/snapshots/{snapshot['learning_snapshot_id']}/gareth-decision",
+                json={
+                    "decision": "APPROVE_FOR_MANUAL_CONSIDERATION",
+                    "rationale": "Gareth approves manual consideration only.",
+                },
+            )
+
+        self.assertEqual(snapshot_response.status_code, 200)
+        self.assertTrue(snapshot["advisory_only"])
+        self.assertTrue(snapshot["gareth_approval_required"])
+        self.assertFalse(snapshot["compliance_rules_updated"])
+        self.assertFalse(snapshot["decision_thresholds_changed"])
+        self.assertEqual(decision_response.status_code, 200)
+        decision = decision_response.json()["decision"]
+        self.assertEqual(decision["decision_by"], "Gareth")
+        self.assertTrue(decision["manual_consideration_only"])
+        self.assertFalse(decision["automatic_action_executed"])
+        self.assertNotIn("recommendation_patterns", audit.call_args_list[0].kwargs)
+        self.assertNotIn("decision_rationale", audit.call_args_list[-1].kwargs)
+        self.assertEqual(approval_audit.call_count, 2)
+
+    def test_unknown_snapshot_cannot_receive_gareth_decision(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_SELF_LEARNING_SNAPSHOTS", []):
+            response = self.client.post(
+                "/glirn/self-learning/snapshots/missing/gareth-decision",
+                json={"decision": "REJECT", "rationale": "No snapshot exists."},
+            )
+        self.assertEqual(response.status_code, 404)
+
+    def test_dashboard_exposes_governed_self_learning_summary(self):
+        with patch.object(app, "PERSISTED_SELF_LEARNING_SNAPSHOTS", [{
+                    "learning_snapshot_id": "snapshot-115", "confidence_score": 82
+                }]), \
+                patch.object(app, "PERSISTED_SELF_LEARNING_DECISIONS", []), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            data = app.glirn_dashboard()
+        summary = data["gareth_command_centre"]["self_learning_summary"]
+        self.assertEqual(summary["snapshot_count"], 1)
+        self.assertEqual(summary["awaiting_gareth_approval_count"], 1)
+        self.assertEqual(summary["latest_confidence_score"], 82)
+        self.assertTrue(summary["advisory_only"])
+        self.assertFalse(summary["autonomous_decision_making_enabled"])
+
+
 if __name__ == "__main__":
     unittest.main()

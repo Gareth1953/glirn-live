@@ -525,6 +525,20 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Governed self-learning legal recruitment brain
+
+Mission 115 generates deterministic advisory learning snapshots from approved local records. It uses Gareth-approved Mission 112 decisions, completed Mission 106 reviews, Mission 113 decline and remediation outcomes, Mission 113A summaries linked to Gareth-approved knowledge updates, and Mission 114 recommendations with Gareth decisions.
+
+Generate a snapshot through `POST /glirn/self-learning/snapshots`. Unapproved external intelligence, system-only decisions, incomplete reviews, and opportunity recommendations without a Gareth decision are excluded. The snapshot provides source counts, correction patterns, review and remediation distributions, opportunity patterns, a confidence score, and a plain-language confidence explanation.
+
+Gareth may record `APPROVE_FOR_MANUAL_CONSIDERATION`, `REJECT`, or `MORE_INFORMATION_REQUIRED` through `POST /glirn/self-learning/snapshots/{snapshot_id}/gareth-decision`. Approval permits manual consideration only. It does not update compliance rules, change decision thresholds, retrain an autonomous system, or modify operational workflows.
+
+Audit events store snapshot identifiers, source counts, pattern counts, confidence, and approval outcomes without copying recommendation patterns, source narratives, or decision rationales. Mission 115 provides no legal advice and has no network client.
+
+Client, candidate, firm, recruiter, and association contact; outreach; referrals; marketing; payments; delivery; and external commitments remain disabled. All Missions 105-114 safeguards remain mandatory.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Opportunity intelligence engine
 
 Mission 114 analyses explicitly submitted public-source signals; it does not crawl websites or retrieve data automatically. Record signals through `POST /glirn/opportunity-intelligence/signals` for law firm growth, partner movement, practice area expansion, or recruitment demand.

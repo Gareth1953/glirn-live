@@ -71,6 +71,10 @@ from glirn_opportunity_intelligence import (
     generate_opportunity_recommendation,
     record_opportunity_signal,
 )
+from glirn_self_learning_brain import (
+    apply_gareth_learning_decision,
+    generate_governed_learning_snapshot,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -124,6 +128,8 @@ PERSISTED_KNOWLEDGE_UPDATES = []
 PERSISTED_OPPORTUNITY_SIGNALS = []
 PERSISTED_OPPORTUNITY_INTELLIGENCE = []
 PERSISTED_OPPORTUNITY_DECISIONS = []
+PERSISTED_SELF_LEARNING_SNAPSHOTS = []
+PERSISTED_SELF_LEARNING_DECISIONS = []
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -158,6 +164,8 @@ def reload_persistent_state():
     PERSISTED_OPPORTUNITY_SIGNALS[:] = list_records("opportunity_signal_record")
     PERSISTED_OPPORTUNITY_INTELLIGENCE[:] = list_records("opportunity_intelligence_record")
     PERSISTED_OPPORTUNITY_DECISIONS[:] = list_records("opportunity_intelligence_decision_record")
+    PERSISTED_SELF_LEARNING_SNAPSHOTS[:] = list_records("self_learning_snapshot_record")
+    PERSISTED_SELF_LEARNING_DECISIONS[:] = list_records("self_learning_decision_record")
 
 
 reload_persistent_state()
@@ -403,6 +411,11 @@ class GlirnOpportunityRecommendationRequest(BaseModel):
 
 
 class GlirnOpportunityDecisionRequest(BaseModel):
+    decision: str
+    rationale: str
+
+
+class GlirnSelfLearningDecisionRequest(BaseModel):
     decision: str
     rationale: str
 
@@ -3857,10 +3870,32 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
         "recommendation_only": True,
         "autonomous_prospecting_enabled": False,
     }
+    decided_learning_snapshot_ids = {
+        item.get("learning_snapshot_id") for item in PERSISTED_SELF_LEARNING_DECISIONS
+    }
+    self_learning_summary = {
+        "snapshot_count": len(PERSISTED_SELF_LEARNING_SNAPSHOTS),
+        "decision_count": len(PERSISTED_SELF_LEARNING_DECISIONS),
+        "awaiting_gareth_approval_count": sum(
+            1 for item in PERSISTED_SELF_LEARNING_SNAPSHOTS
+            if item.get("learning_snapshot_id") not in decided_learning_snapshot_ids
+        ),
+        "latest_confidence_score": (
+            PERSISTED_SELF_LEARNING_SNAPSHOTS[-1].get("confidence_score", 0)
+            if PERSISTED_SELF_LEARNING_SNAPSHOTS else 0
+        ),
+        "advisory_only": True,
+        "gareth_approval_required": True,
+        "compliance_rules_updated": False,
+        "decision_thresholds_changed": False,
+        "autonomous_decision_making_enabled": False,
+    }
     glirn_data["internal_learning_summary"] = learning_summary
     glirn_data["external_learning_summary"] = external_learning_summary
     glirn_data["opportunity_intelligence_summary"] = opportunity_intelligence_summary
     glirn_data["opportunity_intelligence_records"] = list(PERSISTED_OPPORTUNITY_INTELLIGENCE)
+    glirn_data["self_learning_summary"] = self_learning_summary
+    glirn_data["self_learning_snapshots"] = list(PERSISTED_SELF_LEARNING_SNAPSHOTS)
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3901,6 +3936,9 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["opportunity_intelligence_summary"] = opportunity_intelligence_summary
     glirn_data["gareth_command_centre"]["opportunity_intelligence_records"] = list(PERSISTED_OPPORTUNITY_INTELLIGENCE)
     glirn_data["gareth_command_centre"]["opportunity_intelligence_decisions"] = list(PERSISTED_OPPORTUNITY_DECISIONS)
+    glirn_data["gareth_command_centre"]["self_learning_summary"] = self_learning_summary
+    glirn_data["gareth_command_centre"]["self_learning_snapshots"] = list(PERSISTED_SELF_LEARNING_SNAPSHOTS)
+    glirn_data["gareth_command_centre"]["self_learning_decisions"] = list(PERSISTED_SELF_LEARNING_DECISIONS)
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -5511,6 +5549,101 @@ def record_glirn_opportunity_intelligence_decision(
         "autonomous_execution": False,
     })
     return {"status": "gareth_opportunity_decision_recorded", "decision": decision}
+
+
+@app.post("/glirn/self-learning/snapshots")
+def generate_glirn_self_learning_snapshot(x_api_key: str | None = Header(default=None)):
+    require_api_key(x_api_key)
+    snapshot = generate_governed_learning_snapshot(
+        decline_decisions=PERSISTED_DECLINE_DECISIONS,
+        human_reviews=PERSISTED_HUMAN_REVIEWS,
+        learning_outcomes=PERSISTED_LEARNING_OUTCOMES,
+        external_intelligence=PERSISTED_EXTERNAL_INTELLIGENCE,
+        knowledge_updates=PERSISTED_KNOWLEDGE_UPDATES,
+        opportunity_intelligence=PERSISTED_OPPORTUNITY_INTELLIGENCE,
+        opportunity_decisions=PERSISTED_OPPORTUNITY_DECISIONS,
+    )
+    upsert_record("self_learning_snapshot_record", snapshot["learning_snapshot_id"], snapshot)
+    PERSISTED_SELF_LEARNING_SNAPSHOTS[:] = list_records("self_learning_snapshot_record")
+    persist_safe_action(
+        "glirn_self_learning_snapshot_generated",
+        snapshot["learning_snapshot_id"],
+        source_counts=snapshot["source_counts"],
+        pattern_count=len(snapshot["recommendation_patterns"]),
+        confidence_score=snapshot["confidence_score"],
+        confidence_category=snapshot["confidence_category"],
+        advisory_only=True,
+        gareth_approval_required=True,
+        sensitive_source_content_logged=False,
+        compliance_rules_updated=False,
+        decision_thresholds_changed=False,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_self_learning_snapshot",
+        "approval_id": snapshot["learning_snapshot_id"],
+        "decision": "awaiting_gareth_approval",
+        "provider": "glirn_governed_self_learning_brain",
+        "task_type": "recommendation_pattern_learning",
+        "source_counts": snapshot["source_counts"],
+        "confidence_score": snapshot["confidence_score"],
+        "advisory_only": True,
+        "legal_advice_provided": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "self_learning_snapshot_generated",
+        "snapshot": snapshot,
+        "gareth_approval_required": True,
+        "automatic_action_executed": False,
+    }
+
+
+@app.post("/glirn/self-learning/snapshots/{snapshot_id}/gareth-decision")
+def record_glirn_self_learning_decision(
+    snapshot_id: str,
+    request: GlirnSelfLearningDecisionRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    snapshot = next(
+        (
+            item for item in PERSISTED_SELF_LEARNING_SNAPSHOTS
+            if item.get("learning_snapshot_id") == snapshot_id
+        ),
+        None,
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="self-learning snapshot not found")
+    try:
+        decision = apply_gareth_learning_decision(snapshot, request.decision, request.rationale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("self_learning_decision_record", decision["learning_decision_id"], decision)
+    PERSISTED_SELF_LEARNING_DECISIONS[:] = list_records("self_learning_decision_record")
+    persist_safe_action(
+        "glirn_self_learning_gareth_decision",
+        decision["learning_decision_id"],
+        learning_snapshot_id=decision["learning_snapshot_id"],
+        decision=decision["decision"],
+        decision_by="Gareth",
+        decision_rationale_logged=False,
+        manual_consideration_only=True,
+        compliance_rules_updated=False,
+        decision_thresholds_changed=False,
+        automatic_action_executed=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_self_learning_gareth_decision",
+        "approval_id": decision["learning_decision_id"],
+        "decision": decision["decision"],
+        "provider": "gareth_final_approval",
+        "task_type": "self_learning_advisory_decision",
+        "learning_snapshot_id": decision["learning_snapshot_id"],
+        "automatic_action_executed": False,
+        "autonomous_execution": False,
+    })
+    return {"status": "gareth_self_learning_decision_recorded", "decision": decision}
 
 
 @app.post("/glirn/intelligence-briefs/{brief_id}/final-approval")
