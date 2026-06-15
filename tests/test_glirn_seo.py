@@ -21,9 +21,9 @@ class SeoGenerationTests(unittest.TestCase):
             locations,
             [f"{PUBLIC_BASE_URL}{path}" for path in PUBLIC_PAGE_PATHS],
         )
-        self.assertIn(f"{PUBLIC_BASE_URL}/public/", locations)
-        self.assertIn(f"{PUBLIC_BASE_URL}/public/services.html", locations)
-        self.assertIn(f"{PUBLIC_BASE_URL}/public/intelligence-review.html", locations)
+        self.assertIn(f"{PUBLIC_BASE_URL}/", locations)
+        self.assertIn(f"{PUBLIC_BASE_URL}/services.html", locations)
+        self.assertIn(f"{PUBLIC_BASE_URL}/intelligence-review.html", locations)
 
         public_directory = Path(app.BASE_DIR) / "public"
         public_html_pages = {
@@ -32,10 +32,15 @@ class SeoGenerationTests(unittest.TestCase):
             if not path.name.startswith("google")
         }
         sitemap_html_pages = {
-            "index.html" if path == "/public/" else Path(path).name
+            "index.html" if path == "/" else Path(path).name
             for path in PUBLIC_PAGE_PATHS
         }
         self.assertEqual(sitemap_html_pages, public_html_pages)
+
+        self.assertEqual(
+            (public_directory / "sitemap.xml").read_text(encoding="utf-8"),
+            generate_sitemap_xml(),
+        )
 
     def test_robots_txt_allows_indexing_and_links_sitemap(self):
         self.assertEqual(
@@ -52,20 +57,31 @@ class SeoPublicRouteTests(unittest.TestCase):
 
     def test_sitemap_is_publicly_accessible(self):
         response = self.client.get("/sitemap.xml")
+        static_response = self.client.get("/public/sitemap.xml")
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("application/xml"))
-        self.assertIn("https://glirn-live.onrender.com/public/", response.text)
+        self.assertIn("https://glirn-live.onrender.com/", response.text)
+        self.assertEqual(static_response.status_code, 200)
+        self.assertEqual(static_response.text, response.text)
         for path in PUBLIC_PAGE_PATHS:
-            public_response = self.client.get(path)
+            local_path = "/public/" if path == "/" else f"/public{path}"
+            public_response = self.client.get(local_path)
             self.assertEqual(public_response.status_code, 200, path)
 
     def test_robots_txt_is_publicly_accessible(self):
         response = self.client.get("/robots.txt")
+        static_response = self.client.get("/public/robots.txt")
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/plain"))
         self.assertEqual(response.text, generate_robots_txt())
+        self.assertEqual(static_response.status_code, 200)
+        self.assertEqual(static_response.text, response.text)
+        self.assertEqual(
+            (Path(app.BASE_DIR) / "public" / "robots.txt").read_text(encoding="utf-8"),
+            generate_robots_txt(),
+        )
 
 
 if __name__ == "__main__":

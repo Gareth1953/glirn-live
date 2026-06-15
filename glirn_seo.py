@@ -3,14 +3,14 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 
 PUBLIC_BASE_URL = "https://glirn-live.onrender.com"
 PUBLIC_PAGE_PATHS = (
-    "/public/",
-    "/public/about.html",
-    "/public/services.html",
-    "/public/intelligence-review.html",
-    "/public/executive-search.html",
-    "/public/contact.html",
-    "/public/privacy.html",
-    "/public/terms.html",
+    "/",
+    "/about.html",
+    "/services.html",
+    "/intelligence-review.html",
+    "/executive-search.html",
+    "/contact.html",
+    "/privacy.html",
+    "/terms.html",
 )
 
 
@@ -22,10 +22,14 @@ def generate_sitemap_xml() -> str:
     for path in PUBLIC_PAGE_PATHS:
         url = SubElement(urlset, "url")
         SubElement(url, "loc").text = f"{PUBLIC_BASE_URL}{path}"
-    return '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(
-        urlset,
-        encoding="unicode",
-        short_empty_elements=True,
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + tostring(
+            urlset,
+            encoding="unicode",
+            short_empty_elements=True,
+        )
+        + "\n"
     )
 
 
