@@ -8237,5 +8237,185 @@ class Mission115ApiTests(unittest.TestCase):
         self.assertFalse(summary["autonomous_decision_making_enabled"])
 
 
+class ControlledFirmMailerApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.campaigns = []
+        self.approvals = []
+        self.sends = []
+        self.suppressions = []
+
+    def _records(self, category):
+        return {
+            "firm_mailer_campaign_record": self.campaigns,
+            "firm_mailer_approval_record": self.approvals,
+            "firm_mailer_send_record": self.sends,
+            "firm_mailer_suppression_record": self.suppressions,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        records = self._records(category)
+        records[:] = [item for item in records if item.get("_record_id") != record_id]
+        stored = dict(payload)
+        stored["_record_id"] = record_id
+        records.append(stored)
+
+    def _campaign_payload(self):
+        return {
+            "campaign_id": "growth-phase-1b",
+            "firms": [{
+                "firm_name": "Example Technology Law LLP",
+                "email_address": "enquiries@examplelaw.com",
+                "jurisdiction": "United Kingdom",
+                "practice_signals": ["Technology law", "AI law", "Cybersecurity"],
+                "public_source_url": "https://examplelaw.com/services/technology",
+                "evidence_summary": "Public firm information describes technology and cyber capability.",
+                "practice_area_fit": 90,
+                "senior_hiring_likelihood": 75,
+                "technology_ai_relevance": 95,
+                "jurisdiction_fit": 90,
+                "evidence_quality": 85,
+            }],
+        }
+
+    def _patches(self):
+        return (
+            patch.object(app, "PERSISTED_FIRM_MAILER_CAMPAIGNS", self.campaigns),
+            patch.object(app, "PERSISTED_FIRM_MAILER_APPROVALS", self.approvals),
+            patch.object(app, "PERSISTED_FIRM_MAILER_SENDS", self.sends),
+            patch.object(app, "PERSISTED_FIRM_MAILER_SUPPRESSIONS", self.suppressions),
+            patch("app.upsert_record", side_effect=self._upsert),
+            patch("app.list_records", side_effect=self._records),
+        )
+
+    def test_campaign_approval_and_manual_send_are_separate_actions(self):
+        patches = self._patches()
+        with patch.dict("os.environ", {}, clear=True), \
+                patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event") as approval_audit, \
+                patch("app.send_approved_introduction") as send_service:
+            prepared = self.client.post("/glirn/firm-mailer/campaigns", json=self._campaign_payload())
+            target_id = prepared.json()["campaign"]["ranked_targets"][0]["target_id"]
+            approval = self.client.post(
+                "/glirn/firm-mailer/campaigns/growth-phase-1b/approval",
+                json={
+                    "target_ids": [target_id],
+                    "decision": "APPROVE",
+                    "rationale": "Approved for one controlled manual send.",
+                },
+            )
+
+        self.assertEqual(prepared.status_code, 200)
+        self.assertFalse(prepared.json()["sending_allowed"])
+        self.assertEqual(approval.status_code, 200)
+        self.assertFalse(approval.json()["send_triggered"])
+        self.assertTrue(approval.json()["approval"]["send_authorised"])
+        send_service.assert_not_called()
+        self.assertNotIn("evidence_summary", audit.call_args_list[0].kwargs)
+        self.assertEqual(approval_audit.call_count, 2)
+
+    def test_manual_send_without_gareth_approval_is_blocked(self):
+        patches = self._patches()
+        with patch.dict("os.environ", {}, clear=True), \
+                patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+                patch("app.persist_safe_action"), patch("app.record_approval_event"), \
+                patch("app.send_approved_introduction") as send_service:
+            prepared = self.client.post("/glirn/firm-mailer/campaigns", json=self._campaign_payload())
+            target_id = prepared.json()["campaign"]["ranked_targets"][0]["target_id"]
+            response = self.client.post(
+                "/glirn/firm-mailer/campaigns/growth-phase-1b/send",
+                json={"target_ids": [target_id], "reason": "Manual pilot send request."},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"][0]["failure_reason"], "gareth_approval_required")
+        self.assertFalse(response.json()["automatic_send"])
+        send_service.assert_not_called()
+
+    def test_suppression_endpoint_blocks_a_previously_approved_target(self):
+        patches = self._patches()
+        with patch.dict("os.environ", {}, clear=True), \
+                patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+                patch("app.persist_safe_action"), patch("app.record_approval_event"), \
+                patch("app.send_approved_introduction") as send_service:
+            prepared = self.client.post("/glirn/firm-mailer/campaigns", json=self._campaign_payload())
+            target_id = prepared.json()["campaign"]["ranked_targets"][0]["target_id"]
+            self.client.post(
+                "/glirn/firm-mailer/campaigns/growth-phase-1b/approval",
+                json={"target_ids": [target_id], "decision": "APPROVE", "rationale": "Approved."},
+            )
+            suppression = self.client.post(
+                "/glirn/firm-mailer/suppressions",
+                json={"email_address": "enquiries@examplelaw.com", "reason": "opt_out_requested"},
+            )
+            send_service.return_value = {
+                "send_id": "send-1",
+                "campaign_id": "growth-phase-1b",
+                "target_id": target_id,
+                "send_status": "blocked",
+                "failure_reason": "recipient_suppressed",
+                "automatic_send": False,
+            }
+            send_response = self.client.post(
+                "/glirn/firm-mailer/campaigns/growth-phase-1b/send",
+                json={"target_ids": [target_id], "reason": "Manual pilot send request."},
+            )
+
+        self.assertEqual(suppression.status_code, 200)
+        self.assertTrue(suppression.json()["suppression"]["future_sends_blocked"])
+        self.assertEqual(send_response.json()["results"][0]["failure_reason"], "recipient_suppressed")
+        self.assertEqual(send_service.call_args.args[2], ["enquiries@examplelaw.com"])
+
+    def test_dashboard_exposes_controlled_mailer_limits(self):
+        with patch.object(app, "PERSISTED_FIRM_MAILER_CAMPAIGNS", [{"campaign_id": "pilot"}]), \
+                patch.object(app, "PERSISTED_FIRM_MAILER_APPROVALS", []), \
+                patch.object(app, "PERSISTED_FIRM_MAILER_SENDS", []), \
+                patch.object(app, "PERSISTED_FIRM_MAILER_SUPPRESSIONS", []), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            data = app.glirn_dashboard()
+        summary = data["gareth_command_centre"]["firm_mailer_summary"]
+        self.assertEqual(summary["maximum_campaign_size"], 25)
+        self.assertTrue(summary["gareth_approval_required"])
+        self.assertFalse(summary["automatic_sending_enabled"])
+        self.assertFalse(summary["follow_up_automation_enabled"])
+        self.assertFalse(summary["personal_email_harvesting_enabled"])
+
+    def test_successfully_sent_target_cannot_be_sent_twice(self):
+        patches = self._patches()
+        self.sends.append({
+            "campaign_id": "growth-phase-1b",
+            "target_id": "target-01-example-technology-law-llp",
+            "send_status": "sent",
+        })
+        self.approvals.append({
+            "campaign_id": "growth-phase-1b",
+            "approved_target_ids": ["target-01-example-technology-law-llp"],
+            "send_authorised": True,
+        })
+        with patch.dict("os.environ", {}, clear=True), \
+                patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+                patch("app.persist_safe_action"), patch("app.send_approved_introduction") as send_service:
+            self.campaigns.append({
+                "campaign_id": "growth-phase-1b",
+                "ranked_targets": [{
+                    "target_id": "target-01-example-technology-law-llp",
+                    "email_address": "enquiries@examplelaw.com",
+                }],
+            })
+            response = self.client.post(
+                "/glirn/firm-mailer/campaigns/growth-phase-1b/send",
+                json={
+                    "target_ids": ["target-01-example-technology-law-llp"],
+                    "reason": "Attempted duplicate manual send.",
+                },
+            )
+        self.assertEqual(response.json()["results"][0]["failure_reason"], "target_already_sent")
+        send_service.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

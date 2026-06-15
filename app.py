@@ -76,6 +76,14 @@ from glirn_self_learning_brain import (
     generate_governed_learning_snapshot,
 )
 
+from glirn_firm_mailer import (
+    MAX_CAMPAIGN_FIRMS,
+    apply_campaign_approval,
+    build_campaign,
+    build_suppression_record,
+)
+from introduction_mailer_service import send_approved_introduction
+
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -130,6 +138,11 @@ PERSISTED_OPPORTUNITY_INTELLIGENCE = []
 PERSISTED_OPPORTUNITY_DECISIONS = []
 PERSISTED_SELF_LEARNING_SNAPSHOTS = []
 PERSISTED_SELF_LEARNING_DECISIONS = []
+PERSISTED_FIRM_MAILER_CAMPAIGNS = []
+PERSISTED_FIRM_MAILER_APPROVALS = []
+PERSISTED_FIRM_MAILER_SENDS = []
+PERSISTED_FIRM_MAILER_SUPPRESSIONS = []
+
 GLIRN_EMAIL_DRAFTS_DIR = os.path.join("data", "glirn_email_drafts")
 GLIRN_INVOICE_DRAFTS_DIR = os.path.join("data", "glirn_invoice_drafts")
 GLIRN_DEAL_PACKS_DIR = os.path.join("data", "glirn_deal_packs")
@@ -166,6 +179,11 @@ def reload_persistent_state():
     PERSISTED_OPPORTUNITY_DECISIONS[:] = list_records("opportunity_intelligence_decision_record")
     PERSISTED_SELF_LEARNING_SNAPSHOTS[:] = list_records("self_learning_snapshot_record")
     PERSISTED_SELF_LEARNING_DECISIONS[:] = list_records("self_learning_decision_record")
+    PERSISTED_FIRM_MAILER_CAMPAIGNS[:] = list_records("firm_mailer_campaign_record")
+    PERSISTED_FIRM_MAILER_APPROVALS[:] = list_records("firm_mailer_approval_record")
+    PERSISTED_FIRM_MAILER_SENDS[:] = list_records("firm_mailer_send_record")
+    PERSISTED_FIRM_MAILER_SUPPRESSIONS[:] = list_records("firm_mailer_suppression_record")
+
 
 
 reload_persistent_state()
@@ -419,6 +437,26 @@ class GlirnSelfLearningDecisionRequest(BaseModel):
     decision: str
     rationale: str
 
+
+class GlirnFirmMailerCampaignRequest(BaseModel):
+    campaign_id: str
+    firms: list[dict] = Field(default_factory=list)
+
+
+class GlirnFirmMailerApprovalRequest(BaseModel):
+    target_ids: list[str] = Field(default_factory=list)
+    decision: str
+    rationale: str
+
+
+class GlirnFirmMailerSendRequest(BaseModel):
+    target_ids: list[str] = Field(default_factory=list)
+    reason: str
+
+
+class GlirnFirmMailerSuppressionRequest(BaseModel):
+    email_address: str
+    reason: str
 
 class GlirnIntelligenceBriefFinalApprovalRequest(BaseModel):
     action_type: str
@@ -2422,6 +2460,7 @@ def render_gareth_command_centre(glirn_data):
     recommendations = command_centre.get("dave_recommends", []) or []
     new_enquiries = command_centre.get("new_enquiries_awaiting_review", []) or []
     human_reviews = command_centre.get("intelligence_brief_human_reviews", []) or []
+
     notification_summary = command_centre.get("enquiry_notification_summary", {}) or {}
     notification_failures = command_centre.get("notification_failures_requiring_attention", []) or []
     multi_agent_summary = command_centre.get("multi_agent_review_summary", {}) or {}
@@ -3890,12 +3929,36 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
         "decision_thresholds_changed": False,
         "autonomous_decision_making_enabled": False,
     }
+    firm_mailer_summary = {
+        "campaign_count": len(PERSISTED_FIRM_MAILER_CAMPAIGNS),
+        "approval_count": len(PERSISTED_FIRM_MAILER_APPROVALS),
+        "send_record_count": len(PERSISTED_FIRM_MAILER_SENDS),
+        "sent_count": sum(
+            1 for item in PERSISTED_FIRM_MAILER_SENDS if item.get("send_status") == "sent"
+        ),
+        "blocked_or_failed_count": sum(
+            1 for item in PERSISTED_FIRM_MAILER_SENDS if item.get("send_status") != "sent"
+        ),
+        "suppression_count": len(PERSISTED_FIRM_MAILER_SUPPRESSIONS),
+        "maximum_campaign_size": MAX_CAMPAIGN_FIRMS,
+        "gareth_approval_required": True,
+        "automatic_sending_enabled": False,
+        "follow_up_automation_enabled": False,
+        "personal_email_harvesting_enabled": False,
+        "linkedin_automation_enabled": False,
+        "candidate_outreach_enabled": False,
+    }
+
     glirn_data["internal_learning_summary"] = learning_summary
     glirn_data["external_learning_summary"] = external_learning_summary
     glirn_data["opportunity_intelligence_summary"] = opportunity_intelligence_summary
     glirn_data["opportunity_intelligence_records"] = list(PERSISTED_OPPORTUNITY_INTELLIGENCE)
     glirn_data["self_learning_summary"] = self_learning_summary
     glirn_data["self_learning_snapshots"] = list(PERSISTED_SELF_LEARNING_SNAPSHOTS)
+    glirn_data["firm_mailer_summary"] = firm_mailer_summary
+    glirn_data["firm_mailer_campaigns"] = list(PERSISTED_FIRM_MAILER_CAMPAIGNS)
+
+
 
     revenue_ledger = build_revenue_ledger_engine(
         final_centre,
@@ -3939,6 +4002,11 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["self_learning_summary"] = self_learning_summary
     glirn_data["gareth_command_centre"]["self_learning_snapshots"] = list(PERSISTED_SELF_LEARNING_SNAPSHOTS)
     glirn_data["gareth_command_centre"]["self_learning_decisions"] = list(PERSISTED_SELF_LEARNING_DECISIONS)
+    glirn_data["gareth_command_centre"]["firm_mailer_summary"] = firm_mailer_summary
+    glirn_data["gareth_command_centre"]["firm_mailer_campaigns"] = list(PERSISTED_FIRM_MAILER_CAMPAIGNS)
+    glirn_data["gareth_command_centre"]["firm_mailer_approvals"] = list(PERSISTED_FIRM_MAILER_APPROVALS)
+    glirn_data["gareth_command_centre"]["firm_mailer_sends"] = list(PERSISTED_FIRM_MAILER_SENDS)
+    glirn_data["gareth_command_centre"]["firm_mailer_suppressions"] = list(PERSISTED_FIRM_MAILER_SUPPRESSIONS)
     notification_summary = build_enquiry_notification_summary(
         PERSISTED_ENQUIRY_NOTIFICATIONS,
         enquiry_count=len(PUBLIC_LEADS),
@@ -5645,6 +5713,211 @@ def record_glirn_self_learning_decision(
     })
     return {"status": "gareth_self_learning_decision_recorded", "decision": decision}
 
+
+@app.post("/glirn/firm-mailer/campaigns")
+def create_glirn_firm_mailer_campaign(
+    request: GlirnFirmMailerCampaignRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    suppressed_emails = [item.get("email_address") for item in PERSISTED_FIRM_MAILER_SUPPRESSIONS]
+    try:
+        campaign = build_campaign(request.campaign_id, request.firms, suppressed_emails)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("firm_mailer_campaign_record", campaign["campaign_id"], campaign)
+    PERSISTED_FIRM_MAILER_CAMPAIGNS[:] = list_records("firm_mailer_campaign_record")
+    persist_safe_action(
+        "glirn_firm_mailer_campaign_prepared",
+        campaign["campaign_id"],
+        target_count=campaign["target_count"],
+        maximum_target_count=campaign["maximum_target_count"],
+        evidence_content_logged=False,
+        draft_email_content_logged=False,
+        gareth_approval_required=True,
+        automatic_sending_enabled=False,
+        network_execution=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_firm_mailer_approval_package",
+        "approval_id": campaign["approval_package"]["approval_package_id"],
+        "decision": "awaiting_gareth_approval",
+        "provider": "glirn_controlled_firm_mailer",
+        "task_type": "firm_introduction_campaign",
+        "campaign_id": campaign["campaign_id"],
+        "target_count": campaign["target_count"],
+        "automatic_sending_enabled": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "firm_mailer_campaign_prepared_pending_gareth_approval",
+        "campaign": campaign,
+        "sending_allowed": False,
+        "gareth_approval_required": True,
+    }
+
+
+@app.post("/glirn/firm-mailer/campaigns/{campaign_id}/approval")
+def approve_glirn_firm_mailer_targets(
+    campaign_id: str,
+    request: GlirnFirmMailerApprovalRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    campaign = next(
+        (item for item in PERSISTED_FIRM_MAILER_CAMPAIGNS if item.get("campaign_id") == campaign_id),
+        None,
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="firm mailer campaign not found")
+    try:
+        approval = apply_campaign_approval(
+            campaign, request.target_ids, request.decision, request.rationale
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    approval["campaign_approval_id"] = (
+        f"{approval['campaign_approval_id']}-{len(PERSISTED_FIRM_MAILER_APPROVALS) + 1}"
+    )
+    upsert_record("firm_mailer_approval_record", approval["campaign_approval_id"], approval)
+    PERSISTED_FIRM_MAILER_APPROVALS[:] = list_records("firm_mailer_approval_record")
+    persist_safe_action(
+        "glirn_firm_mailer_gareth_approval",
+        approval["campaign_approval_id"],
+        campaign_id=campaign_id,
+        target_count=len(approval["target_ids"]),
+        approved_target_count=len(approval["approved_target_ids"]),
+        decision=approval["decision"],
+        decision_by="Gareth",
+        decision_rationale_logged=False,
+        send_triggered=False,
+        network_execution=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_firm_mailer_gareth_approval",
+        "approval_id": approval["campaign_approval_id"],
+        "decision": approval["decision"],
+        "provider": "gareth_final_approval",
+        "task_type": "firm_introduction_campaign",
+        "campaign_id": campaign_id,
+        "target_count": len(approval["target_ids"]),
+        "approved_target_count": len(approval["approved_target_ids"]),
+        "send_triggered": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "firm_mailer_gareth_approval_recorded",
+        "approval": approval,
+        "send_triggered": False,
+    }
+
+
+@app.post("/glirn/firm-mailer/campaigns/{campaign_id}/send")
+def send_glirn_approved_firm_mailer_targets(
+    campaign_id: str,
+    request: GlirnFirmMailerSendRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    if not request.reason.strip():
+        raise HTTPException(status_code=422, detail="manual send reason is required")
+    target_ids = list(dict.fromkeys(request.target_ids))
+    if not target_ids or len(target_ids) > MAX_CAMPAIGN_FIRMS:
+        raise HTTPException(status_code=422, detail="manual send requires 1 to 25 target_ids")
+    campaign = next(
+        (item for item in PERSISTED_FIRM_MAILER_CAMPAIGNS if item.get("campaign_id") == campaign_id),
+        None,
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="firm mailer campaign not found")
+    targets = {item["target_id"]: item for item in campaign.get("ranked_targets", [])}
+    if any(target_id not in targets for target_id in target_ids):
+        raise HTTPException(status_code=422, detail="manual send contains an unknown campaign target")
+    suppression_emails = [item.get("email_address") for item in PERSISTED_FIRM_MAILER_SUPPRESSIONS]
+    results = []
+    for target_id in target_ids:
+        already_sent = any(
+            item.get("campaign_id") == campaign_id
+            and item.get("target_id") == target_id
+            and item.get("send_status") == "sent"
+            for item in PERSISTED_FIRM_MAILER_SENDS
+        )
+        approval = None if already_sent else next(
+            (
+                item for item in reversed(PERSISTED_FIRM_MAILER_APPROVALS)
+                if item.get("campaign_id") == campaign_id
+                and target_id in item.get("approved_target_ids", [])
+                and item.get("send_authorised") is True
+            ),
+            None,
+        )
+        if already_sent:
+            result = {
+                "send_id": f"firm-mailer-send-{target_id}",
+                "campaign_id": campaign_id,
+                "target_id": target_id,
+                "send_status": "blocked",
+                "failure_reason": "target_already_sent",
+                "automatic_send": False,
+            }
+        elif approval is None:
+            result = {
+                "send_id": f"firm-mailer-send-{target_id}",
+                "campaign_id": campaign_id,
+                "target_id": target_id,
+                "send_status": "blocked",
+                "failure_reason": "gareth_approval_required",
+                "automatic_send": False,
+            }
+        else:
+            result = send_approved_introduction(
+                targets[target_id], approval, suppression_emails
+            )
+        result["manual_send_reason_recorded"] = True
+        record_id = f"{result['send_id']}-{len(PERSISTED_FIRM_MAILER_SENDS) + len(results) + 1}"
+        upsert_record("firm_mailer_send_record", record_id, result)
+        results.append(result)
+        persist_safe_action(
+            "glirn_firm_mailer_manual_send_attempt",
+            record_id,
+            campaign_id=campaign_id,
+            target_id=target_id,
+            send_status=result["send_status"],
+            failure_reason=result.get("failure_reason"),
+            recipient_address_logged=False,
+            draft_email_content_logged=False,
+            manual_action=True,
+            automatic_send=False,
+        )
+    PERSISTED_FIRM_MAILER_SENDS[:] = list_records("firm_mailer_send_record")
+    return {
+        "status": "firm_mailer_manual_send_processed",
+        "results": results,
+        "automatic_send": False,
+        "follow_up_scheduled": False,
+    }
+
+
+@app.post("/glirn/firm-mailer/suppressions")
+def record_glirn_firm_mailer_suppression(
+    request: GlirnFirmMailerSuppressionRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        suppression = build_suppression_record(request.email_address, request.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("firm_mailer_suppression_record", suppression["suppression_id"], suppression)
+    PERSISTED_FIRM_MAILER_SUPPRESSIONS[:] = list_records("firm_mailer_suppression_record")
+    persist_safe_action(
+        "glirn_firm_mailer_opt_out_recorded",
+        suppression["suppression_id"],
+        opt_out_status="suppressed",
+        recipient_address_logged=False,
+        future_sends_blocked=True,
+    )
+    return {"status": "firm_mailer_suppression_recorded", "suppression": suppression}
 
 @app.post("/glirn/intelligence-briefs/{brief_id}/final-approval")
 def record_glirn_intelligence_brief_final_approval(

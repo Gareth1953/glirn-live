@@ -525,6 +525,22 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Growth Phase 1B controlled 25-firm introduction mailer
+
+Growth Phase 1B prepares a curated pilot campaign of no more than 25 law firms through `POST /glirn/firm-mailer/campaigns`. Firm records must use public business information, a public source URL, a minimal evidence summary, and a general business mailbox such as `info@`, `enquiries@`, `contact@`, `recruitment@`, or `careers@`. Personal mailboxes are rejected and the workflow does not scrape or retrieve source data.
+
+Each firm is scored for practice-area fit, senior-hiring likelihood, technology and AI relevance, jurisdiction fit, and evidence quality. The campaign returns a ranked approval package containing the firm, general mailbox, reason selected, draft email, risk flags, approval status, opt-out status, and send status. Drafts introduce GLIRN, offer the Complimentary Senior Legal Hiring Snapshot™ and retain the £500 Senior Legal Hiring Intelligence Review as the deeper next step. Every draft includes sender identity, non-legal-advice wording, and a valid opt-out instruction.
+
+Gareth approves or rejects one or more named targets through `POST /glirn/firm-mailer/campaigns/{campaign_id}/approval`. Approval is a separate action and never sends an email. An approved target can be processed only through the explicit manual endpoint `POST /glirn/firm-mailer/campaigns/{campaign_id}/send`, which re-checks the 25-target cap, current suppression records, and Gareth approval.
+
+External campaign sending remains disabled unless all existing GLIRN SMTP variables are configured and `GLIRN_INTRO_MAILER_ENABLED=true` is set deliberately. SMTP configuration alone does not enable the mailer. No follow-up is scheduled after a send, and no approval action triggers network execution.
+
+Record an opt-out through `POST /glirn/firm-mailer/suppressions`. Suppression is checked again at send time, including where approval predates the opt-out. Audit events store campaign, target, approval and status identifiers without copying evidence summaries, draft bodies, recipient addresses, or approval rationales.
+
+LinkedIn automation, candidate outreach, personal email harvesting, autonomous sending, follow-up automation, payments, legal advice, and external commitments remain disabled. All Missions 105-115 and Growth Phase 1A safeguards remain mandatory.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Governed self-learning legal recruitment brain
 
 Mission 115 generates deterministic advisory learning snapshots from approved local records. It uses Gareth-approved Mission 112 decisions, completed Mission 106 reviews, Mission 113 decline and remediation outcomes, Mission 113A summaries linked to Gareth-approved knowledge updates, and Mission 114 recommendations with Gareth decisions.
