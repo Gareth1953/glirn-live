@@ -525,6 +525,18 @@ The generated Markdown file is stored locally under `data/glirn_intelligence_bri
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Growth Phase 1 visibility preparation engine
+
+Growth Phase 1 creates local visibility drafts through `POST /glirn/visibility/packages`. Each package includes four LinkedIn drafts covering legal hiring intelligence, AI and Technology Law, partner hiring advisory content, and recruitment trend commentary; market reports for selected UK, UAE, Singapore, Europe, and US markets; website blog, FAQ, service-description, and capability-statement suggestions; and proposed LinkedIn, report, and website calendars.
+
+Generation requires supplied evidence points. The engine redacts contact details, includes a non-legal-advice disclaimer in reports, excludes candidate-sensitive content, and runs deterministic internal checks for evidence, required asset coverage, supported markets, disclaimers, and publication controls. A package that fails internal review cannot receive Gareth approval.
+
+Gareth records `APPROVE`, `REJECT`, or `CHANGES_REQUIRED` through `POST /glirn/visibility/packages/{package_id}/gareth-decision`. Approval writes publication-ready Markdown reports to the local `data/glirn_visibility_reports` directory. Approved reports can be downloaded through `GET /glirn/visibility/packages/{package_id}/reports/{asset_id}/download` for manual review and publication.
+
+No approval or download endpoint publishes content. LinkedIn posting, website publishing, automatic scheduling, outreach, contact functionality, network execution, and external commitments remain disabled. Audit events retain identifiers, counts, markets, review status, and Gareth's decision without copying evidence narratives or decision rationales.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Growth Phase 1B controlled 25-firm introduction mailer
 
 Growth Phase 1B prepares a curated pilot campaign of no more than 25 law firms through `POST /glirn/firm-mailer/campaigns`. Firm records must use public business information, a public source URL, a minimal evidence summary, and a general business mailbox such as `info@`, `enquiries@`, `contact@`, `recruitment@`, or `careers@`. Personal mailboxes are rejected and the workflow does not scrape or retrieve source data.

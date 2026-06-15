@@ -8261,6 +8261,95 @@ class Mission115ApiTests(unittest.TestCase):
         self.assertFalse(summary["autonomous_decision_making_enabled"])
 
 
+class VisibilityPreparationApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.packages = []
+        self.decisions = []
+
+    def _records(self, category):
+        return {
+            "visibility_package_record": self.packages,
+            "visibility_decision_record": self.decisions,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        self._records(category).append(dict(payload))
+
+    def _payload(self):
+        return {
+            "package_id": "growth-phase-1",
+            "topic": "Cross-border legal hiring demand",
+            "practice_area": "AI and Technology Law",
+            "markets": ["United Kingdom", "United Arab Emirates", "Singapore", "Europe", "United States"],
+            "evidence_points": ["Public reporting indicates continued demand for specialist legal capability."],
+        }
+
+    def test_generation_review_approval_and_download_are_local_and_gated(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_VISIBILITY_PACKAGES", self.packages), \
+                patch.object(app, "PERSISTED_VISIBILITY_DECISIONS", self.decisions), \
+                patch("app.GLIRN_VISIBILITY_REPORTS_DIR", temp_dir), \
+                patch("app.upsert_record", side_effect=self._upsert), \
+                patch("app.list_records", side_effect=self._records), \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event") as approval_audit:
+            generation_response = self.client.post("/glirn/visibility/packages", json=self._payload())
+            package_data = generation_response.json()["package"]
+            blocked_download = self.client.get(
+                f"/glirn/visibility/packages/{package_data['package_id']}/reports/report-united-kingdom/download"
+            )
+            approval_response = self.client.post(
+                f"/glirn/visibility/packages/{package_data['package_id']}/gareth-decision",
+                json={"decision": "APPROVE", "rationale": "Approved for manual publication preparation."},
+            )
+            download_response = self.client.get(
+                f"/glirn/visibility/packages/{package_data['package_id']}/reports/report-united-kingdom/download"
+            )
+
+        self.assertEqual(generation_response.status_code, 200)
+        self.assertTrue(package_data["internal_review"]["review_passed"])
+        self.assertFalse(generation_response.json()["publication_allowed"])
+        self.assertEqual(blocked_download.status_code, 403)
+        self.assertEqual(approval_response.status_code, 200)
+        decision = approval_response.json()["decision"]
+        self.assertEqual(decision["decision_by"], "Gareth")
+        self.assertFalse(decision["publication_executed"])
+        self.assertEqual(len(decision["local_reports"]), 5)
+        self.assertEqual(download_response.status_code, 200)
+        self.assertIn("UK Legal Hiring Intelligence Report", download_response.text)
+        self.assertNotIn("evidence_points", audit.call_args_list[0].kwargs)
+        self.assertNotIn("decision_rationale", audit.call_args_list[-1].kwargs)
+        self.assertEqual(approval_audit.call_count, 2)
+
+    def test_unknown_package_cannot_be_approved(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_VISIBILITY_PACKAGES", []):
+            response = self.client.post(
+                "/glirn/visibility/packages/missing/gareth-decision",
+                json={"decision": "APPROVE", "rationale": "Missing package."},
+            )
+        self.assertEqual(response.status_code, 404)
+
+    def test_dashboard_exposes_visibility_approval_queue_without_publish_controls(self):
+        with patch.object(app, "PERSISTED_VISIBILITY_PACKAGES", [{"package_id": "visibility-1"}]), \
+                patch.object(app, "PERSISTED_VISIBILITY_DECISIONS", []), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            data = app.glirn_dashboard()
+        summary = data["gareth_command_centre"]["visibility_preparation_summary"]
+        self.assertEqual(summary["package_count"], 1)
+        self.assertEqual(summary["awaiting_gareth_approval_count"], 1)
+        self.assertTrue(summary["gareth_approval_required"])
+        self.assertFalse(summary["automatic_publishing_enabled"])
+        self.assertFalse(summary["linkedin_posting_enabled"])
+        self.assertFalse(summary["website_publishing_enabled"])
+
+
 class HiringSnapshotApiTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app.app)
