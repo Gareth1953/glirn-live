@@ -9,6 +9,7 @@
 - Growth Phase 1: Visibility Preparation Engine - completed, verified, and approved by Gareth. Publication preparation remains local and manual, with Gareth approval required.
 - Growth Phase 1A: Complimentary Hiring Snapshot and premium offer hierarchy - completed, verified, and approved by Gareth. The £500 GLIRN Senior Legal Hiring Intelligence Review remains the visible deeper paid offer.
 - Growth Phase 1B: Controlled 25-Firm Introduction Mailer - completed, verified, and approved by Gareth. Campaign preparation, approval, suppression, and explicit manual sending remain separate governed actions.
+- SEO Phase 1: Sitemap and robots support - completed, verified, and approved by Gareth. Only existing public pages are indexed; internal drafts and approval-gated reports remain excluded.
 
 Mission 113 and Mission 113A remain recommendation-only systems. Gareth approval is mandatory for learning insight consideration and knowledge-base updates. No autonomous decision, outreach, referral, payment, delivery, regulatory change, or external commitment is enabled.
 

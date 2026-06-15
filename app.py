@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -90,6 +90,7 @@ from glirn_firm_mailer import (
     build_suppression_record,
 )
 from introduction_mailer_service import send_approved_introduction
+from glirn_seo import generate_robots_txt, generate_sitemap_xml
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -102,6 +103,16 @@ async def app_lifespan(_app):
 
 app = FastAPI(title="ArbitrageEngineV1 Local API", lifespan=app_lifespan)
 app.mount("/public", StaticFiles(directory=BASE_DIR / "public", html=True), name="public")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap_xml():
+    return Response(generate_sitemap_xml(), media_type="application/xml")
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
+def robots_txt():
+    return generate_robots_txt()
 
 
 @app.middleware("http")
