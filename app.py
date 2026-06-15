@@ -76,6 +76,11 @@ from glirn_self_learning_brain import (
     generate_governed_learning_snapshot,
 )
 
+from glirn_hiring_snapshot import (
+    apply_gareth_snapshot_decision,
+    generate_complimentary_hiring_snapshot,
+)
+
 from glirn_firm_mailer import (
     MAX_CAMPAIGN_FIRMS,
     apply_campaign_approval,
@@ -138,6 +143,9 @@ PERSISTED_OPPORTUNITY_INTELLIGENCE = []
 PERSISTED_OPPORTUNITY_DECISIONS = []
 PERSISTED_SELF_LEARNING_SNAPSHOTS = []
 PERSISTED_SELF_LEARNING_DECISIONS = []
+PERSISTED_HIRING_SNAPSHOTS = []
+PERSISTED_HIRING_SNAPSHOT_DECISIONS = []
+
 PERSISTED_FIRM_MAILER_CAMPAIGNS = []
 PERSISTED_FIRM_MAILER_APPROVALS = []
 PERSISTED_FIRM_MAILER_SENDS = []
@@ -179,6 +187,9 @@ def reload_persistent_state():
     PERSISTED_OPPORTUNITY_DECISIONS[:] = list_records("opportunity_intelligence_decision_record")
     PERSISTED_SELF_LEARNING_SNAPSHOTS[:] = list_records("self_learning_snapshot_record")
     PERSISTED_SELF_LEARNING_DECISIONS[:] = list_records("self_learning_decision_record")
+    PERSISTED_HIRING_SNAPSHOTS[:] = list_records("hiring_snapshot_record")
+    PERSISTED_HIRING_SNAPSHOT_DECISIONS[:] = list_records("hiring_snapshot_decision_record")
+
     PERSISTED_FIRM_MAILER_CAMPAIGNS[:] = list_records("firm_mailer_campaign_record")
     PERSISTED_FIRM_MAILER_APPROVALS[:] = list_records("firm_mailer_approval_record")
     PERSISTED_FIRM_MAILER_SENDS[:] = list_records("firm_mailer_send_record")
@@ -437,6 +448,19 @@ class GlirnSelfLearningDecisionRequest(BaseModel):
     decision: str
     rationale: str
 
+
+class GlirnHiringSnapshotRequest(BaseModel):
+    snapshot_id: str
+    role_title: str
+    organisation_context: str
+    jurisdiction: str
+    practice_area: str
+    evidence_points: list[str] = Field(default_factory=list)
+
+
+class GlirnHiringSnapshotDecisionRequest(BaseModel):
+    decision: str
+    rationale: str
 
 class GlirnFirmMailerCampaignRequest(BaseModel):
     campaign_id: str
@@ -3929,6 +3953,27 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
         "decision_thresholds_changed": False,
         "autonomous_decision_making_enabled": False,
     }
+    decided_snapshot_ids = {
+        item.get("snapshot_id") for item in PERSISTED_HIRING_SNAPSHOT_DECISIONS
+    }
+    hiring_snapshot_summary = {
+        "snapshot_count": len(PERSISTED_HIRING_SNAPSHOTS),
+        "decision_count": len(PERSISTED_HIRING_SNAPSHOT_DECISIONS),
+        "awaiting_gareth_approval_count": sum(
+            1 for item in PERSISTED_HIRING_SNAPSHOTS
+            if item.get("snapshot_id") not in decided_snapshot_ids
+        ),
+        "approved_for_manual_use_count": sum(
+            1 for item in PERSISTED_HIRING_SNAPSHOT_DECISIONS
+            if item.get("approved_for_manual_use") is True
+        ),
+        "automatic_sending_enabled": False,
+        "automatic_client_contact_enabled": False,
+        "payment_handling_enabled": False,
+        "automatic_delivery_enabled": False,
+        "gareth_approval_required": True,
+    }
+
     firm_mailer_summary = {
         "campaign_count": len(PERSISTED_FIRM_MAILER_CAMPAIGNS),
         "approval_count": len(PERSISTED_FIRM_MAILER_APPROVALS),
@@ -3955,6 +4000,9 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["opportunity_intelligence_records"] = list(PERSISTED_OPPORTUNITY_INTELLIGENCE)
     glirn_data["self_learning_summary"] = self_learning_summary
     glirn_data["self_learning_snapshots"] = list(PERSISTED_SELF_LEARNING_SNAPSHOTS)
+    glirn_data["hiring_snapshot_summary"] = hiring_snapshot_summary
+    glirn_data["hiring_snapshots"] = list(PERSISTED_HIRING_SNAPSHOTS)
+
     glirn_data["firm_mailer_summary"] = firm_mailer_summary
     glirn_data["firm_mailer_campaigns"] = list(PERSISTED_FIRM_MAILER_CAMPAIGNS)
 
@@ -4002,6 +4050,10 @@ def glirn_dashboard(x_api_key: str | None = Header(default=None)):
     glirn_data["gareth_command_centre"]["self_learning_summary"] = self_learning_summary
     glirn_data["gareth_command_centre"]["self_learning_snapshots"] = list(PERSISTED_SELF_LEARNING_SNAPSHOTS)
     glirn_data["gareth_command_centre"]["self_learning_decisions"] = list(PERSISTED_SELF_LEARNING_DECISIONS)
+    glirn_data["gareth_command_centre"]["hiring_snapshot_summary"] = hiring_snapshot_summary
+    glirn_data["gareth_command_centre"]["hiring_snapshots"] = list(PERSISTED_HIRING_SNAPSHOTS)
+    glirn_data["gareth_command_centre"]["hiring_snapshot_decisions"] = list(PERSISTED_HIRING_SNAPSHOT_DECISIONS)
+
     glirn_data["gareth_command_centre"]["firm_mailer_summary"] = firm_mailer_summary
     glirn_data["gareth_command_centre"]["firm_mailer_campaigns"] = list(PERSISTED_FIRM_MAILER_CAMPAIGNS)
     glirn_data["gareth_command_centre"]["firm_mailer_approvals"] = list(PERSISTED_FIRM_MAILER_APPROVALS)
@@ -5713,6 +5765,98 @@ def record_glirn_self_learning_decision(
     })
     return {"status": "gareth_self_learning_decision_recorded", "decision": decision}
 
+
+@app.post("/glirn/hiring-snapshots")
+def generate_glirn_hiring_snapshot(
+    request: GlirnHiringSnapshotRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        snapshot = generate_complimentary_hiring_snapshot(
+            request.snapshot_id,
+            request.role_title,
+            request.organisation_context,
+            request.jurisdiction,
+            request.practice_area,
+            request.evidence_points,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("hiring_snapshot_record", snapshot["snapshot_id"], snapshot)
+    PERSISTED_HIRING_SNAPSHOTS[:] = list_records("hiring_snapshot_record")
+    persist_safe_action(
+        "glirn_hiring_snapshot_generated",
+        snapshot["snapshot_id"],
+        jurisdiction=snapshot["jurisdiction"],
+        practice_area=snapshot["practice_area"],
+        internal_review_passed=snapshot["internal_review"]["review_passed"],
+        evidence_content_logged=False,
+        gareth_approval_required=True,
+        automatic_sending_enabled=False,
+        payment_handling_enabled=False,
+        network_execution=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_hiring_snapshot_approval_package",
+        "approval_id": snapshot["internal_review"]["review_id"],
+        "decision": "awaiting_gareth_approval",
+        "provider": "glirn_hiring_snapshot_engine",
+        "task_type": "complimentary_hiring_snapshot",
+        "snapshot_id": snapshot["snapshot_id"],
+        "internal_review_passed": snapshot["internal_review"]["review_passed"],
+        "automatic_sending_enabled": False,
+        "autonomous_execution": False,
+    })
+    return {
+        "status": "hiring_snapshot_generated_pending_gareth_approval",
+        "snapshot": snapshot,
+        "gareth_approval_required": True,
+        "sending_allowed": False,
+    }
+
+
+@app.post("/glirn/hiring-snapshots/{snapshot_id}/gareth-decision")
+def record_glirn_hiring_snapshot_decision(
+    snapshot_id: str,
+    request: GlirnHiringSnapshotDecisionRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    require_api_key(x_api_key)
+    snapshot = next(
+        (item for item in PERSISTED_HIRING_SNAPSHOTS if item.get("snapshot_id") == snapshot_id),
+        None,
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="hiring snapshot not found")
+    try:
+        decision = apply_gareth_snapshot_decision(snapshot, request.decision, request.rationale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upsert_record("hiring_snapshot_decision_record", decision["snapshot_decision_id"], decision)
+    PERSISTED_HIRING_SNAPSHOT_DECISIONS[:] = list_records("hiring_snapshot_decision_record")
+    persist_safe_action(
+        "glirn_hiring_snapshot_gareth_decision",
+        decision["snapshot_decision_id"],
+        snapshot_id=decision["snapshot_id"],
+        decision=decision["decision"],
+        decision_by="Gareth",
+        decision_rationale_logged=False,
+        delivery_executed=False,
+        network_execution=False,
+    )
+    record_approval_event({
+        "event_type": "glirn_hiring_snapshot_gareth_decision",
+        "approval_id": decision["snapshot_decision_id"],
+        "decision": decision["decision"],
+        "provider": "gareth_final_approval",
+        "task_type": "complimentary_hiring_snapshot_approval",
+        "snapshot_id": decision["snapshot_id"],
+        "approved_for_manual_use": decision["approved_for_manual_use"],
+        "delivery_executed": False,
+        "autonomous_execution": False,
+    })
+    return {"status": "gareth_hiring_snapshot_decision_recorded", "decision": decision}
 
 @app.post("/glirn/firm-mailer/campaigns")
 def create_glirn_firm_mailer_campaign(

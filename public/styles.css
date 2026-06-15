@@ -24,6 +24,9 @@ a{color:inherit}
 .hero-panel{border:1px solid rgba(255,255,255,.22);padding:24px;background:rgba(255,255,255,.08);border-radius:8px}
 .hero-panel strong{display:block;font-size:34px;color:#f5d995}
 .button-row{display:flex;flex-wrap:wrap;gap:12px}
+.offer-step{font-size:.78rem;font-weight:700;text-transform:uppercase;color:var(--green);margin:0 0 8px}
+.offer-price{font-size:1.25rem;font-weight:800;color:var(--navy);margin:8px 0}
+.featured-offer{border-top:4px solid var(--gold)}
 .button{display:inline-block;padding:12px 18px;border-radius:4px;text-decoration:none;font-weight:800;background:var(--green);color:white}
 .button.secondary{background:transparent;border:1px solid rgba(255,255,255,.65)}
 .hero .hero-trust-line{margin:16px 0 0;font-size:14px;font-weight:800;letter-spacing:.03em;color:#f5d995}

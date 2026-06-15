@@ -541,6 +541,18 @@ LinkedIn automation, candidate outreach, personal email harvesting, autonomous s
 
 Human-led. Technology-enhanced. Confidentiality-first.
 
+## Growth Phase 1A complimentary hiring snapshot
+
+Growth Phase 1A introduces the Complimentary Senior Legal Hiring Snapshot™ as a low-friction entry point without replacing the paid GLIRN Senior Legal Hiring Intelligence Review. The public offer hierarchy is: the complimentary snapshot; the GLIRN Senior Legal Hiring Intelligence Review at a £500 fixed fee; and Executive Search Support / Premium Legal Recruitment Engagements.
+
+Generate a local snapshot approval package through `POST /glirn/hiring-snapshots`. The package includes an initial role assessment, market hiring difficulty indication, initial hiring risk indicators, preliminary market observations, a high-level recommendation, the required disclaimer, and the next-step statement: "For a deeper assessment, request the £500 Senior Legal Hiring Intelligence Review."
+
+Snapshot generation requires supplied evidence and performs deterministic internal checks. It redacts contact details and remains blocked pending Gareth approval. Gareth may record `APPROVE`, `REJECT`, or `CHANGES_REQUIRED` through `POST /glirn/hiring-snapshots/{snapshot_id}/gareth-decision`. Approval permits manual use only and does not send or deliver the snapshot.
+
+Automatic sending, outreach, client contact, publishing, payment handling, legal advice, delivery, external commitments, and network-based execution paths remain disabled. Audit records retain identifiers, jurisdiction, practice area, review status, and Gareth's decision without copying evidence narratives or decision rationales. All Missions 105-115 safeguards remain mandatory.
+
+Human-led. Technology-enhanced. Confidentiality-first.
+
 ## Governed self-learning legal recruitment brain
 
 Mission 115 generates deterministic advisory learning snapshots from approved local records. It uses Gareth-approved Mission 112 decisions, completed Mission 106 reviews, Mission 113 decline and remediation outcomes, Mission 113A summaries linked to Gareth-approved knowledge updates, and Mission 114 recommendations with Gareth decisions.

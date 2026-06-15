@@ -5439,30 +5439,28 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/public/index.html")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("Request a Complimentary Senior Legal Hiring Snapshot&trade;", response.text)
         self.assertIn(
-            "Helping law firms and legal professionals make better career and hiring decisions.",
+            "Understand the risks, opportunities and market conditions before committing to an expensive senior legal hire.",
             response.text,
         )
         self.assertIn("Why Clients Choose GLIRN", response.text)
         self.assertIn("GLIRN Principles", response.text)
         self.assertIn("Unsure whether to recruit?", response.text)
-        self.assertIn(
-            "AI-assisted, human-reviewed hiring intelligence, executive search support, and confidential career conversations for legal organisations and legal professionals at every stage of their journey.",
-            response.text,
-        )
+        self.assertIn("A low-friction first assessment", response.text)
         self.assertIn("Human-led. Technology-enhanced. Confidentiality-first.", response.text)
         self.assertIn("Reduce Hiring Risk Before Committing to Search", response.text)
         self.assertIn(
             "Gain greater clarity before committing to a full executive search process.",
             response.text,
         )
-        self.assertIn("What the &pound;500 Senior Legal Hiring Intelligence Brief May Include", response.text)
+        self.assertIn("What the &pound;500 GLIRN Senior Legal Hiring Intelligence Review May Include", response.text)
         self.assertIn("Role and hiring priority assessment", response.text)
         self.assertIn("Market difficulty analysis", response.text)
         self.assertIn("Talent availability overview", response.text)
         self.assertIn("Search viability considerations", response.text)
         self.assertIn("Suggested discussion points", response.text)
-        self.assertIn("Request a Confidential Brief", response.text)
+        self.assertIn("Request a Complimentary Snapshot", response.text)
         principle_items = [
             "Confidentiality-first approach",
             "Human-led decision making",
@@ -5473,7 +5471,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn('<ul class="principles-list">', response.text)
         for principle in principle_items:
             self.assertIn(f"<li>{principle}</li>", response.text)
-        review_position = response.text.index("What the &pound;500 Senior Legal Hiring Intelligence Brief May Include")
+        review_position = response.text.index("What the &pound;500 GLIRN Senior Legal Hiring Intelligence Review May Include")
         cta_position = response.text.index("Unsure whether to recruit?")
         trust_position = response.text.index("Why Clients Choose GLIRN")
         self.assertLess(review_position, cta_position)
@@ -5523,7 +5521,7 @@ class ApiTests(unittest.TestCase):
             "General Counsel",
             "Chief Legal Officer",
             "Ready to Take the Next Step?",
-            "Request a Confidential Brief",
+            "Request a Complimentary Snapshot",
             "Arrange a Confidential Career Discussion",
             "Arrange a confidential career discussion to explore opportunities, long-term career progression, and your future within the legal profession.",
             "Ethical candidate handling",
@@ -5580,10 +5578,10 @@ class ApiTests(unittest.TestCase):
         self.assertIn("Search viability considerations", response.text)
         self.assertIn("Suggested discussion points", response.text)
         self.assertIn("&pound;500", response.text)
-        self.assertIn("Unsure whether to recruit?", response.text)
-        self.assertIn("Request a Confidential Brief", response.text)
-        self.assertIn("A confidential first step", response.text)
-        self.assertIn("Gain clarity before committing to search.", response.text)
+        self.assertIn("Need more depth than the complimentary snapshot?", response.text)
+        self.assertIn("Request the &pound;500 Intelligence Review", response.text)
+        self.assertIn("A deeper fixed-fee assessment", response.text)
+        self.assertIn("The deeper assessment after an initial snapshot", response.text)
         self.assertIn("subject to manual scope review and written acceptance before paid work begins", response.text)
         self.assertIn("No payment is requested automatically.", response.text)
         self.assertIn('<ul class="principles-list">', response.text)
@@ -5609,8 +5607,6 @@ class ApiTests(unittest.TestCase):
             response = self.client.get(f"/public/{page}")
             self.assertEqual(response.status_code, 200, page)
             self.assertIn(disclaimer, response.text, page)
-            self.assertNotIn("Senior Legal Hiring Intelligence Review", response.text, page)
-            self.assertNotIn("Hiring Intelligence Review", response.text, page)
             self.assertNotIn("Professional legal recruitment support", response.text, page)
 
         homepage = self.client.get("/public/index.html").text
@@ -5620,15 +5616,43 @@ class ApiTests(unittest.TestCase):
         self.assertIn("All enquiries are manually reviewed before any paid work is accepted.", contact)
         self.assertIn("No payment is requested automatically.", homepage)
         self.assertIn("GLIRN does not take automatic payment through the public website.", terms)
-        self.assertIn("GBP 500 Senior Legal Hiring Intelligence Brief", contact)
+        self.assertIn("GBP 500 Senior Legal Hiring Intelligence Review", contact)
         qa_statement = "Every intelligence brief is subject to human review and quality assurance before delivery."
         decline_statement = (
             "GLIRN may decline engagements where another specialist adviser would better serve the client's needs."
         )
         for page in ["index.html", "services.html", "intelligence-review.html", "terms.html"]:
             body = self.client.get(f"/public/{page}").text
-            self.assertIn(qa_statement, body, page)
+            if page == "services.html":
+                self.assertIn("Every snapshot and intelligence review is subject to human review", body, page)
+            else:
+                self.assertIn(qa_statement, body, page)
             self.assertIn(decline_statement, body, page)
+
+    def test_growth_phase_1a_offer_hierarchy_preserves_paid_review(self):
+        homepage = self.client.get("/public/index.html").text
+        services = self.client.get("/public/services.html").text
+        contact = self.client.get("/public/contact.html").text
+
+        for body in (homepage, services):
+            self.assertIn("Complimentary Senior Legal Hiring Snapshot&trade;", body)
+            self.assertIn("GLIRN Senior Legal Hiring Intelligence Review", body)
+            self.assertIn("&pound;500 Fixed Fee", body)
+            self.assertIn("Executive Search Support / Premium Legal Recruitment Engagements", body)
+            self.assertIn(
+                "For a deeper assessment, request the &pound;500 Senior Legal Hiring Intelligence Review.",
+                body,
+            )
+        for required in (
+            "Initial role assessment",
+            "Market hiring difficulty indication",
+            "Initial hiring risk indicators",
+            "Preliminary market observations",
+            "High-level recommendation",
+        ):
+            self.assertIn(required, homepage)
+        self.assertIn("Complimentary Senior Legal Hiring Snapshot&trade;", contact)
+        self.assertIn("GBP 500 Senior Legal Hiring Intelligence Review", contact)
 
     def test_core_public_pages_return_200_without_prohibited_claims(self):
         pages = [
@@ -8237,6 +8261,88 @@ class Mission115ApiTests(unittest.TestCase):
         self.assertFalse(summary["autonomous_decision_making_enabled"])
 
 
+class HiringSnapshotApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app.app)
+        self.snapshots = []
+        self.decisions = []
+
+    def _records(self, category):
+        return {
+            "hiring_snapshot_record": self.snapshots,
+            "hiring_snapshot_decision_record": self.decisions,
+        }.get(category, [])
+
+    def _upsert(self, category, record_id, payload):
+        self._records(category).append(dict(payload))
+
+    def _payload(self):
+        return {
+            "snapshot_id": "snapshot-api-001",
+            "role_title": "Technology Partner",
+            "organisation_context": "International law firm considering a strategic senior hire",
+            "jurisdiction": "United Kingdom",
+            "practice_area": "AI and Technology Law",
+            "evidence_points": ["Public market reporting indicates specialist demand."],
+        }
+
+    def test_snapshot_generation_and_approval_remain_manual_only(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_HIRING_SNAPSHOTS", self.snapshots), \
+                patch.object(app, "PERSISTED_HIRING_SNAPSHOT_DECISIONS", self.decisions), \
+                patch("app.upsert_record", side_effect=self._upsert), \
+                patch("app.list_records", side_effect=self._records), \
+                patch("app.persist_safe_action") as audit, \
+                patch("app.record_approval_event") as approval_audit:
+            generation = self.client.post("/glirn/hiring-snapshots", json=self._payload())
+            snapshot = generation.json()["snapshot"]
+            approval = self.client.post(
+                f"/glirn/hiring-snapshots/{snapshot['snapshot_id']}/gareth-decision",
+                json={"decision": "APPROVE", "rationale": "Approved for manual preparation only."},
+            )
+
+        self.assertEqual(generation.status_code, 200)
+        self.assertTrue(generation.json()["gareth_approval_required"])
+        self.assertFalse(generation.json()["sending_allowed"])
+        self.assertEqual(approval.status_code, 200)
+        decision = approval.json()["decision"]
+        self.assertEqual(decision["decision_by"], "Gareth")
+        self.assertTrue(decision["approved_for_manual_use"])
+        self.assertFalse(decision["delivery_executed"])
+        self.assertFalse(decision["automatic_client_contact_enabled"])
+        self.assertFalse(decision["payment_handling_enabled"])
+        self.assertNotIn("evidence_points", audit.call_args_list[0].kwargs)
+        self.assertNotIn("decision_rationale", audit.call_args_list[-1].kwargs)
+        self.assertEqual(approval_audit.call_count, 2)
+
+    def test_unknown_snapshot_cannot_be_approved(self):
+        with patch.dict("os.environ", {}, clear=True), \
+                patch.object(app, "PERSISTED_HIRING_SNAPSHOTS", []):
+            response = self.client.post(
+                "/glirn/hiring-snapshots/missing/gareth-decision",
+                json={"decision": "APPROVE", "rationale": "Missing snapshot."},
+            )
+        self.assertEqual(response.status_code, 404)
+
+    def test_dashboard_exposes_snapshot_queue_without_external_actions(self):
+        with patch.object(app, "PERSISTED_HIRING_SNAPSHOTS", [{"snapshot_id": "snapshot-1"}]), \
+                patch.object(app, "PERSISTED_HIRING_SNAPSHOT_DECISIONS", []), \
+                patch.object(app, "PERSISTED_GLOBAL_INTELLIGENCE", []), \
+                patch.object(app, "PERSISTED_CONFIDENCE_ASSESSMENTS", []), \
+                patch.object(app, "PERSISTED_MULTI_AGENT_REVIEWS", []), \
+                patch.object(app, "PERSISTED_HUMAN_REVIEWS", []), \
+                patch.object(app, "PERSISTED_ENQUIRY_NOTIFICATIONS", []):
+            data = app.glirn_dashboard()
+        summary = data["gareth_command_centre"]["hiring_snapshot_summary"]
+        self.assertEqual(summary["snapshot_count"], 1)
+        self.assertEqual(summary["awaiting_gareth_approval_count"], 1)
+        self.assertTrue(summary["gareth_approval_required"])
+        self.assertFalse(summary["automatic_sending_enabled"])
+        self.assertFalse(summary["automatic_client_contact_enabled"])
+        self.assertFalse(summary["payment_handling_enabled"])
+        self.assertFalse(summary["automatic_delivery_enabled"])
+
+
 class ControlledFirmMailerApiTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app.app)
@@ -8416,6 +8522,7 @@ class ControlledFirmMailerApiTests(unittest.TestCase):
             )
         self.assertEqual(response.json()["results"][0]["failure_reason"], "target_already_sent")
         send_service.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
