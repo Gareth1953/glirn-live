@@ -6,6 +6,7 @@ PUBLIC_PAGE_PATHS = (
     "/",
     "/about.html",
     "/services.html",
+    "/senior-legal-hiring-snapshot.html",
     "/intelligence-review.html",
     "/executive-search.html",
     "/contact.html",
