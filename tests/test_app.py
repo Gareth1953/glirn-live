@@ -5843,20 +5843,22 @@ class ApiTests(unittest.TestCase):
         finally:
             app.PUBLIC_LEADS[:] = original_leads
 
-    def test_upgraded_public_lead_form_exists(self):
+    def test_public_contact_page_uses_email_enquiry_not_dead_static_form(self):
         response = self.client.get("/public/contact.html")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('name="inquiry_type"', response.text)
-        self.assertIn('name="practice_area"', response.text)
-        self.assertIn('name="jurisdiction"', response.text)
-        self.assertIn('name="timescale"', response.text)
-        self.assertIn("/glirn/public-leads/intake", response.text)
-        self.assertIn('maxlength="2000"', response.text)
-        self.assertIn("Senior Legal Professional Career Discussion", response.text)
-        self.assertIn("Newly Qualified / Future Legal Leader Interest", response.text)
-        self.assertIn('name="career_stage"', response.text)
-        self.assertIn('name="confidential_career_interest"', response.text)
+        self.assertIn("Request a Complimentary Senior Legal Hiring Snapshot", response.text)
+        self.assertIn("organisation type", response.text.lower())
+        self.assertIn("role or senior appointment", response.text.lower())
+        self.assertIn("jurisdiction or location", response.text.lower())
+        self.assertIn("succession-related", response.text)
+        self.assertIn("Discuss the &pound;500 Senior Legal Hiring Intelligence Review", response.text)
+        self.assertIn("Executive Search / Premium Legal Recruitment Enquiries", response.text)
+        self.assertIn("Confidential Career Discussions", response.text)
+        self.assertIn("mailto:legalintelligencerecruitment@outlook.com", response.text)
+        self.assertIn("The live GLIRN website uses email enquiries", response.text)
+        self.assertNotIn("<form", response.text)
+        self.assertNotIn("/glirn/public-leads/intake", response.text)
 
     def test_senior_and_future_legal_candidate_enquiries_route_safely(self):
         base = {
